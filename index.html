@@ -1,0 +1,1633 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+  createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, GoogleAuthProvider, signInWithPopup
+} from 'firebase/auth';
+import { getFirestore, collection, addDoc, query, onSnapshot, orderBy, doc, deleteDoc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
+
+// Importar ícones do Lucide React
+import {
+  Film,
+  Building,
+  Edit,
+  User,
+  Camera,
+  Lightbulb,
+  Palette,
+  Clock,
+  Crop,
+  Sparkles,
+  Copy,
+  RotateCcw,
+  Save,
+  Menu,
+  X,
+  LogIn,
+  UserCircle,
+  History,
+  LayoutGrid,
+  DollarSign,
+  Loader2,
+  CheckCircle,
+  AlertCircle,
+  PlusCircle,
+  Users,
+  Trash2,
+  PenSquare,
+  Languages,
+  Mic,
+  Mail,
+  Lock,
+  CreditCard,
+  LogOut,
+  UserPlus,
+  ArrowRightCircle,
+  Type,
+  Youtube,
+  Image as ImageIcon // Renomeado para evitar conflito
+} from 'lucide-react';
+
+// Variáveis globais fornecidas pelo ambiente Canvas
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Inicialização do Firebase (fora do componente para evitar re-inicializações desnecessárias)
+let app;
+let db;
+let auth;
+
+try {
+  app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+  auth = getAuth(app);
+} catch (error) {
+  console.error("Erro ao inicializar o Firebase:", error);
+}
+
+// --- Opções estáticas para os campos de seleção (DEFINIDAS FORA DO COMPONENTE) ---
+const videoStyleOptions = ['Realista', 'Anime', 'Cinematográfico', 'Futurista', 'Documentário', 'Animação 2D', 'Stop Motion', 'VFX'];
+const cameraTypeOptions = ['Travelling lento', 'Drone sobrevoando', 'POV (Ponto de Vista)', 'Plano sequência', 'Zoom in/out', 'Câmara fixa', 'Handheld', 'Panorâmica', 'Tilt'];
+const lightingOptions = ['Luz natural dourada', 'Neon vibrante', 'Sombra dramática', 'Luz suave difusa', 'Flash estroboscópico', 'Luz de velas', 'Contraluz', 'Luz ambiente'];
+const colorPaletteOptions = ['Tons pastéis', 'Cores vibrantes', 'Monocromático', 'Cores quentes', 'Cores frias', 'Sépia', 'Preto e Branco', 'Cores Complementares'];
+const formatOptions = ['16:9 (Paisagem)', '9:16 (Vertical/TikTok)', '1:1 (Quadrado)', '4:3 (Clássico)'];
+const outputLanguageOptions = ['portuguese', 'english'];
+const voiceNarrationOptions = ['Voz Brasileira (Português do Brasil)', 'Voz Masculina Padrão', 'Voz Feminina Padrão', 'Narrador Robótico', 'Sem Narração'];
+// ---------------------------------------------------------------------------------
+
+// Componente de Input Reutilizável (definido fora do componente App)
+const InputField = React.memo(({ label, icon: Icon, type = 'text', value, onChange, placeholder, options, min, max, step, tip, multiple = false }) => {
+  // console.log(`Rendering InputField: ${label}`); // Log para depuração de re-renderização do InputField
+  const controlledValue = value === null || value === undefined ? '' : value;
+
+  // Handler interno para passar o valor extraído para o onChange do pai
+  const handleChangeEvent = useCallback((e) => {
+    if (type === 'range') {
+      onChange(Number(e.target.value));
+    } else if (type === 'multi-select') {
+      onChange(e);
+    } else {
+      onChange(e.target.value);
+    }
+  }, [onChange, type]);
+
+  return (
+    <div className="mb-4">
+      <label className="block text-gray-300 text-sm font-bold mb-2 flex items-center">
+        {Icon && <Icon size={18} className="mr-2 text-purple-400" />} {/* Ícones sem brilho extra */}
+        {label}
+      </label>
+      {type === 'select' ? (
+        <select
+          value={controlledValue}
+          onChange={handleChangeEvent}
+          className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
+        >
+          <option value="" disabled>{placeholder}</option>
+          {options.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+      ) : type === 'multi-select' ? (
+        <select
+          multiple={multiple}
+          value={controlledValue}
+          onChange={handleChangeEvent}
+          className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 h-32 overflow-y-auto glass-effect-input-subtle"
+        >
+          {options.length === 0 && <option value="" disabled>Nenhum personagem guardado. Crie um!</option>}
+          {options.map((option) => (
+            <option key={option.id} value={option.id}>{option.name}</option>
+          ))}
+        </select>
+      ) : type === 'textarea' ? (
+        <textarea
+          value={controlledValue}
+          onChange={handleChangeEvent}
+          placeholder={placeholder}
+          rows="3"
+          className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
+        />
+      ) : type === 'range' ? (
+        <div className="flex items-center space-x-3">
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={controlledValue}
+            onChange={handleChangeEvent}
+            className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-purple-500"
+          />
+          <input
+            type="number"
+            value={controlledValue}
+            onChange={handleChangeEvent}
+            className="w-20 shadow appearance-none border border-gray-600 rounded-lg py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            min={min}
+            max={max}
+          />
+        </div>
+      ) : (
+        <input
+          type={type}
+          value={controlledValue}
+          onChange={handleChangeEvent}
+          placeholder={placeholder}
+          className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
+        />
+      )}
+      {tip && <p className="text-gray-400 text-xs mt-1">{tip}</p>}
+    </div>
+  );
+});
+
+
+const App = () => {
+  // console.log("App component re-rendered"); // Log para depuração de re-renderização do App
+
+  // Estado para controlar a exibição da página de entrada
+  const [showEntryPage, setShowEntryPage] = useState(true);
+
+  // Estados para os campos do formulário principal
+  const [videoStyle, setVideoStyle] = useState('');
+  const [theme, setTheme] = useState('');
+  const [narrative, setNarrative] = useState('');
+  const [characters, setCharacters] = useState([]);
+  const [cameraType, setCameraType] = useState('');
+  const [lighting, setLighting] = useState('');
+  const [colorPalette, setColorPalette] = useState('');
+  const [duration, setDuration] = useState(10);
+  const [format, setFormat] = useState('');
+  const [quality, setQuality] = useState('');
+  const [generatedPrompt, setGeneratedPrompt] = useState('');
+  const [showCopiedMessage, setShowCopiedMessage] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // Novos estados para idioma e voz
+  const [outputLanguage, setOutputLanguage] = useState('portuguese');
+  const [voiceNarration, setVoiceNaration] = useState('');
+
+  // Estado para o modo de entrada (AI vs Manual)
+  const [isManualInputMode, setIsManualInputMode] = useState(false); // false = AI, true = Manual
+
+  // Estados para os IDs dos vídeos do YouTube
+  const [youtubeVideoId1, setYoutubeVideoId1] = useState('');
+  const [youtubeVideoId2, setYoutubeVideoId2] = useState('');
+  const [youtubeVideoId3, setYoutubeVideoId3] = useState('');
+  const [youtubeVideoId4, setYoutubeVideoId4] = useState('');
+
+  // Novo estado para o conteúdo multimédia do cabeçalho
+  const [headerMediaUrl, setHeaderMediaUrl] = useState('');
+
+
+  // Estados do Firebase
+  const [userId, setUserId] = useState(null);
+  const [userEmail, setUserEmail] = useState('');
+  const [userCPF, setUserCPF] = useState('');
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [userPrompts, setUserPrompts] = useState([]);
+  const [userCharacters, setUserCharacters] = useState([]);
+
+  // Estados para feedback do utilizador e carregamento
+  const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState({ type: '', text: '' });
+
+  // Estados para gestão de personagens
+  const [isCharacterManagerOpen, setIsCharacterManagerOpen] = useState(false);
+  const [newCharacterName, setNewCharacterName] = useState('');
+  const [newCharacterDescription, setNewCharacterDescription] = useState('');
+  const [newCharacterVisuals, setNewCharacterVisuals] = useState('');
+  const [newCharacterPersonality, setNewCharacterPersonality] = useState('');
+  const [editingCharacter, setEditingCharacter] = useState(null);
+
+  // Novos estados para modais de autenticação e perfil
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showPlansModal, setShowPlansModal] = useState(false);
+
+  // Função para exibir mensagens de feedback
+  const showFeedback = useCallback((type, text) => {
+    setFeedbackMessage({ type, text });
+    setTimeout(() => setFeedbackMessage({ type: '', text: '' }), 3000);
+  }, []);
+
+  // Efeito para inicialização do Firebase e autenticação
+  useEffect(() => {
+    if (!app || !auth) {
+      console.error("Firebase não inicializado corretamente.");
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+        setUserEmail(user.email || 'N/A');
+        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/data`);
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+          setUserCPF(userDocSnap.data().cpf || '');
+        } else {
+          setUserCPF('');
+        }
+      } else {
+        setUserId(null);
+        setUserEmail('');
+        setUserCPF('');
+        try {
+          if (initialAuthToken) {
+            await signInWithCustomToken(auth, initialAuthToken);
+            setUserId(auth.currentUser?.uid);
+            setUserEmail(auth.currentUser?.email || 'N/A');
+          } else {
+            await signInAnonymously(auth);
+            setUserId(auth.currentUser?.uid);
+            setUserEmail(auth.currentUser?.email || 'Anónimo');
+          }
+        } catch (error) {
+          console.error("Erro na autenticação Firebase inicial:", error);
+          setUserId(crypto.randomUUID());
+          setUserEmail('Anónimo (Erro de Autenticação)');
+        }
+      }
+      setIsAuthReady(true);
+    });
+
+    return () => unsubscribe();
+  }, [initialAuthToken]);
+
+  // Efeito para carregar prompts e personagens do utilizador quando a autenticação estiver pronta
+  useEffect(() => {
+    if (isAuthReady && userId && db) {
+      // Carregar Prompts
+      const promptsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/prompts`);
+      const qPrompts = query(promptsCollectionRef, orderBy('createdAt', 'desc'));
+      const unsubscribePrompts = onSnapshot(qPrompts, (snapshot) => {
+        const promptsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setUserPrompts(promptsData);
+      }, (error) => {
+        console.error("Erro ao buscar prompts:", error);
+        showFeedback('error', 'Erro ao carregar o seu histórico de prompts.');
+      });
+
+      // Carregar Personagens
+      const charactersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/characters`);
+      const qCharacters = query(charactersCollectionRef, orderBy('name', 'asc'));
+      const unsubscribeCharacters = onSnapshot(qCharacters, (snapshot) => {
+        const newCharactersData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Adicionar verificação para evitar re-renderizações desnecessárias se os dados forem os mesmos
+        if (JSON.stringify(newCharactersData) !== JSON.stringify(userCharacters)) {
+          setUserCharacters(newCharactersData);
+        }
+      }, (error) => {
+        console.error("Erro ao buscar personagens:", error);
+        showFeedback('error', 'Erro ao carregar os seus personagens.');
+      });
+
+      return () => {
+        unsubscribePrompts();
+        unsubscribeCharacters();
+      };
+    }
+  }, [isAuthReady, userId, db, userCharacters, showFeedback]);
+
+  // Funções de alteração de estado para os campos do formulário principal
+  // Envolvidas em useCallback para estabilizar as referências passadas ao InputField
+  const handleSetVideoStyle = useCallback((value) => setVideoStyle(value), []);
+  const handleSetTheme = useCallback((value) => setTheme(value), []);
+  const handleSetNarrative = useCallback((value) => setNarrative(value), []);
+  const handleSetCameraType = useCallback((value) => setCameraType(value), []);
+  const handleSetLighting = useCallback((value) => setLighting(value), []);
+  const handleSetColorPalette = useCallback((value) => setColorPalette(value), []);
+  const handleSetDuration = useCallback((value) => setDuration(value), []);
+  const handleSetFormat = useCallback((value) => setFormat(value), []);
+  const handleSetQuality = useCallback((value) => setQuality(value), []);
+  const handleSetOutputLanguage = useCallback((value) => setOutputLanguage(value), []);
+  const handleSetVoiceNarration = useCallback((value) => setVoiceNaration(value), []);
+  const handleSetAuthEmail = useCallback((value) => setAuthEmail(value), []);
+  const handleSetAuthPassword = useCallback((value) => setAuthPassword(value), []);
+  const handleSetUserCPF = useCallback((value) => setUserCPF(value), []);
+  const handleSetNewCharacterName = useCallback((value) => setNewCharacterName(value), []);
+  const handleSetNewCharacterDescription = useCallback((value) => setNewCharacterDescription(value), []);
+  const handleSetNewCharacterVisuals = useCallback((value) => setNewCharacterVisuals(value), []);
+  const handleSetNewCharacterPersonality = useCallback((value) => setNewCharacterPersonality(value), []);
+
+  // Handlers para os IDs dos vídeos do YouTube
+  const handleSetYoutubeVideoId1 = useCallback((value) => setYoutubeVideoId1(value), []);
+  const handleSetYoutubeVideoId2 = useCallback((value) => setYoutubeVideoId2(value), []);
+  const handleSetYoutubeVideoId3 = useCallback((value) => setYoutubeVideoId3(value), []);
+  const handleSetYoutubeVideoId4 = useCallback((value) => setYoutubeVideoId4(value), []);
+
+  // Handler para o URL do cabeçalho
+  const handleSetHeaderMediaUrl = useCallback((value) => setHeaderMediaUrl(value), []);
+
+
+  // Função para construir o prompt de entrada para a IA
+  const buildInputPromptForAI = useCallback(() => {
+    let inputPrompt = `Gere um prompt de vídeo detalhado e profissional para IA (como Veo, Sora, Runway).`;
+    inputPrompt += ` O prompt final deve ser na língua ${outputLanguage === 'english' ? 'inglesa' : 'portuguesa'}.`;
+    inputPrompt += ` Inclua todos os detalhes fornecidos e adicione elementos cinematográficos para torná-lo envolvente. O prompt deve ser direto e otimizado para modelos de texto para vídeo.`;
+
+    // Adicionar detalhes dos personagens selecionados
+    if (characters.length > 0) {
+      inputPrompt += "\n\nPersonagens Envolvidos e as suas Descrições (Mantenha Consistência):";
+      characters.forEach(charId => {
+        const character = userCharacters.find(uc => uc.id === charId);
+        if (character) {
+          inputPrompt += `\n- Nome: ${character.name}`;
+          if (character.description) inputPrompt += `\n  Descrição: ${character.description}`;
+          if (character.visualTraits) inputPrompt += `\n  Traços Visuais: ${character.visualTraits}`;
+          if (character.personalityTraits) inputPrompt += `\n  Traços de Personalidade: ${character.personalityTraits}`;
+          inputPrompt += `\n  **É crucial que este personagem mantenha a sua aparência e personalidade consistentes em todas as cenas.**`;
+        }
+      });
+      inputPrompt += "\n\n";
+    }
+
+    if (videoStyle) inputPrompt += `\nEstilo do Vídeo: ${videoStyle}.`;
+    if (theme) inputPrompt += `\nTema/Ambiente: ${theme}.`;
+    if (narrative) inputPrompt += `\nNarrativa: ${narrative}.`;
+    if (cameraType) inputPrompt += `\nTipo de Câmara/Movimento: ${cameraType}.`;
+    if (lighting) inputPrompt += `\nIluminação: ${lighting}.`;
+    if (colorPalette) inputPrompt += `\nPaleta de Cores: ${colorPalette}.`;
+    if (duration) inputPrompt += `\nDuração: ${duration} segundos.`;
+    if (format) inputPrompt += `\nFormato: ${format}.`;
+    if (quality) inputPrompt += `\nQualidade e Detalhes: ${quality}.`;
+    if (voiceNarration) inputPrompt += `\nVoz/Narração: ${voiceNarration}.`;
+
+    inputPrompt += `\n\nO prompt final deve ser conciso, cinematográfico e pronto para uso em ferramentas de IA na língua ${outputLanguage === 'english' ? 'inglesa' : 'portuguesa'}. Priorize a consistência dos personagens descritos.`;
+    return inputPrompt;
+  }, [videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration, userCharacters, outputLanguage]);
+
+  // Função para gerar o prompt usando a API Gemini
+  const generatePromptWithAI = useCallback(async () => {
+    setIsLoadingPrompt(true);
+    setGeneratedPrompt('');
+    showFeedback('', '');
+
+    const prompt = buildInputPromptForAI();
+    let chatHistory = [];
+    chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+
+    const payload = { contents: chatHistory };
+    const apiKey = "";
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`Erro da API: ${response.status} - ${errorData.error?.message || response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      if (result.candidates && result.candidates.length > 0 &&
+          result.candidates[0].content && result.candidates[0].content.parts &&
+          result.candidates[0].content.parts.length > 0) {
+        const text = result.candidates[0].content.parts[0].text;
+        setGeneratedPrompt(text);
+        showFeedback('success', 'Prompt gerado com sucesso pela IA!');
+      } else {
+        showFeedback('error', 'A IA não conseguiu gerar um prompt. Tente novamente com mais detalhes.');
+        console.error("Estrutura de resposta inesperada da API:", result);
+      }
+    } catch (error) {
+      showFeedback('error', `Erro ao gerar prompt: ${error.message}`);
+      console.error("Erro ao chamar a API Gemini:", error);
+    } finally {
+      setIsLoadingPrompt(false);
+    }
+  }, [buildInputPromptForAI, showFeedback]);
+
+  // Função para copiar o prompt
+  const copyPrompt = useCallback(() => {
+    if (generatedPrompt) {
+      const textarea = document.createElement('textarea');
+      textarea.value = generatedPrompt;
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        setShowCopiedMessage(true);
+        setTimeout(() => setShowCopiedMessage(false), 2000);
+        showFeedback('success', 'Prompt copiado para a área de transferência!');
+      } catch (err) {
+        console.error('Falha ao copiar:', err);
+        showFeedback('error', 'Não foi possível copiar o prompt.');
+      }
+      document.body.removeChild(textarea);
+    } else {
+      showFeedback('error', 'Nenhum prompt para copiar!');
+    }
+  }, [generatedPrompt, showFeedback]);
+
+  // Função para guardar o prompt no Firestore
+  const savePrompt = useCallback(async () => {
+    if (!userId) {
+      showFeedback('error', "Por favor, inicie sessão para guardar os seus prompts.");
+      return;
+    }
+    if (!generatedPrompt) {
+      showFeedback('error', "Nenhum prompt para guardar!");
+      return;
+    }
+
+    try {
+      const promptsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/prompts`);
+      await addDoc(promptsCollectionRef, {
+        prompt: generatedPrompt,
+        createdAt: new Date(),
+        videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, outputLanguage, voiceNarration
+      });
+      showFeedback('success', "Prompt guardado com sucesso!");
+    } catch (error) {
+      console.error("Erro ao guardar o prompt:", error);
+      showFeedback('error', "Erro ao guardar o prompt. Tente novamente.");
+    }
+  }, [userId, generatedPrompt, videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, outputLanguage, voiceNarration, showFeedback]);
+
+  // Função para redefinir os campos do formulário principal
+  const resetForm = useCallback(() => {
+    setVideoStyle('');
+    setTheme('');
+    setNarrative('');
+    setCharacters([]);
+    setCameraType('');
+    setLighting('');
+    setColorPalette('');
+    setDuration(10);
+    setFormat('');
+    setQuality('');
+    setGeneratedPrompt('');
+    setOutputLanguage('portuguese');
+    setVoiceNarration('');
+    showFeedback('', '');
+  }, [showFeedback]);
+
+  // Funções de gestão de personagens
+  const handleSaveCharacter = useCallback(async () => {
+    if (!userId) {
+      showFeedback('error', "Inicie sessão para guardar personagens.");
+      return;
+    }
+    if (!newCharacterName.trim()) {
+      showFeedback('error', "O nome do personagem é obrigatório.");
+      return;
+    }
+
+    try {
+      const charactersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/characters`);
+      if (editingCharacter) {
+        const charDocRef = doc(db, charactersCollectionRef.path, editingCharacter.id);
+        await updateDoc(charDocRef, {
+          name: newCharacterName,
+          description: newCharacterDescription,
+          visualTraits: newCharacterVisuals,
+          personalityTraits: newCharacterPersonality,
+          updatedAt: new Date()
+        });
+        showFeedback('success', `Personagem "${newCharacterName}" atualizado!`);
+      } else {
+        await addDoc(charactersCollectionRef, {
+          name: newCharacterName,
+          description: newCharacterDescription,
+          visualTraits: newCharacterVisuals,
+          personalityTraits: newCharacterPersonality,
+          createdAt: new Date()
+        });
+        showFeedback('success', `Personagem "${newCharacterName}" guardado!`);
+      }
+      setNewCharacterName('');
+      setNewCharacterDescription('');
+      setNewCharacterVisuals('');
+      setNewCharacterPersonality('');
+      setEditingCharacter(null);
+    } catch (error) {
+      console.error("Erro ao guardar personagem:", error);
+      showFeedback('error', "Erro ao guardar personagem. Tente novamente.");
+    }
+  }, [userId, newCharacterName, newCharacterDescription, newCharacterVisuals, newCharacterPersonality, editingCharacter, showFeedback]);
+
+  const handleEditCharacter = useCallback((character) => {
+    setEditingCharacter(character);
+    setNewCharacterName(character.name);
+    setNewCharacterDescription(character.description);
+    setNewCharacterVisuals(character.visualTraits);
+    setNewCharacterPersonality(character.personalityTraits);
+  }, []);
+
+  const handleDeleteCharacter = useCallback(async (charId, charName) => {
+    if (!userId) {
+      showFeedback('error', "Inicie sessão para excluir personagens.");
+      return;
+    }
+    if (window.confirm(`Tem a certeza que deseja excluir o personagem "${charName}"?`)) {
+      try {
+        const charDocRef = doc(db, `artifacts/${appId}/users/${userId}/characters`, charId);
+        await deleteDoc(charDocRef);
+        showFeedback('success', `Personagem "${charName}" excluído!`);
+      } catch (error) {
+        console.error("Erro ao excluir personagem:", error);
+        showFeedback('error', "Erro ao excluir personagem. Tente novamente.");
+      }
+    }
+  }, [userId, showFeedback]);
+
+  const handleSelectCharacterInPrompt = useCallback((e) => {
+    const selectedOptions = Array.from(e.target.selectedOptions).map(option => option.value);
+    setCharacters(selectedOptions);
+  }, []);
+
+  // Funções de Autenticação
+  const handleRegister = useCallback(async () => {
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+      const user = userCredential.user;
+      await setDoc(doc(db, `artifacts/${appId}/users/${user.uid}/profile/data`), {
+        email: user.email,
+        createdAt: new Date(),
+        cpf: ''
+      });
+      showFeedback('success', 'Registo concluído com sucesso! Está com sessão iniciada.');
+      setShowAuthModal(false);
+    } catch (error) {
+      showFeedback('error', `Erro no registo: ${error.message}`);
+      console.error("Erro no registo:", error);
+    }
+  }, [authEmail, authPassword, showFeedback]);
+
+  const handleLogin = useCallback(async () => {
+    try {
+      await signInWithEmailAndPassword(auth, authEmail, authPassword);
+      showFeedback('success', 'Sessão iniciada com sucesso!');
+      setShowAuthModal(false);
+    } catch (error) {
+      showFeedback('error', `Erro ao iniciar sessão: ${error.message}`);
+      console.error("Erro ao iniciar sessão:", error);
+    }
+  }, [authEmail, authPassword, showFeedback]);
+
+  const handleGoogleSignIn = useCallback(async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      const userCredential = await signInWithPopup(auth, provider);
+      const user = userCredential.user;
+      const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/data`);
+      const userDocSnap = await getDoc(userDocRef);
+      if (!userDocSnap.exists()) {
+        await setDoc(userDocRef, {
+          email: user.email,
+          createdAt: new Date(),
+          cpf: ''
+        });
+      }
+      showFeedback('success', 'Sessão iniciada com Google com sucesso!');
+      setShowAuthModal(false);
+    } catch (error) {
+      showFeedback('error', `Erro ao iniciar sessão com Google: ${error.message}`);
+      console.error("Erro ao iniciar sessão com Google:", error);
+    }
+  }, [showFeedback]);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await signOut(auth);
+      showFeedback('success', 'Sessão terminada com sucesso!');
+      await signInAnonymously(auth);
+    } catch (error) {
+      showFeedback('error', `Erro ao terminar sessão: ${error.message}`);
+      console.error("Erro ao terminar sessão:", error);
+    }
+  }, [showFeedback]);
+
+  // Funções de Perfil
+  const handleSaveProfile = useCallback(async () => {
+    if (!userId) {
+      showFeedback('error', "Utilizador não autenticado.");
+      return;
+    }
+    try {
+      const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/data`);
+      await setDoc(userDocRef, {
+        email: userEmail,
+        cpf: userCPF,
+        updatedAt: new Date()
+      }, { merge: true });
+      showFeedback('success', 'Perfil atualizado com sucesso!');
+      setShowProfileModal(false);
+    } catch (error) {
+      showFeedback('error', `Erro ao guardar perfil: ${error.message}`);
+      console.error("Erro ao guardar perfil:", error);
+    }
+  }, [userId, userEmail, userCPF, showFeedback]);
+
+  // Função para entrar na plataforma com um pequeno atraso
+  const handleEnterPlatform = useCallback(() => {
+    // Adiciona um pequeno atraso para a transição ser visível
+    setTimeout(() => {
+      setShowEntryPage(false);
+    }, 500); // 500ms de atraso
+  }, []);
+
+  // Função para determinar se o URL é de um vídeo do YouTube
+  const isYouTubeVideo = (url) => {
+    return url.includes('youtube.com/watch?v=') || url.includes('youtu.be/');
+  };
+
+  // Função para extrair o ID do vídeo do YouTube
+  const getYouTubeVideoId = (url) => {
+    let videoId = '';
+    const youtubeRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+    const match = url.match(youtubeRegex);
+    if (match && match[1]) {
+      videoId = match[1];
+    }
+    return videoId;
+  };
+
+  // Componente de Input Reutilizável (sem React.memo)
+  const InputField = ({ label, icon: Icon, type = 'text', value, onChange, placeholder, options, min, max, step, tip, multiple = false }) => {
+    // console.log(`Rendering InputField: ${label}`); // Log para depuração de re-renderização do InputField
+    const controlledValue = value === null || value === undefined ? '' : value;
+
+    // Handler interno para passar o valor extraído para o onChange do pai
+    const handleChangeEvent = useCallback((e) => {
+      if (type === 'range') {
+        onChange(Number(e.target.value));
+      } else if (type === 'multi-select') {
+        onChange(e);
+      } else {
+        onChange(e.target.value);
+      }
+    }, [onChange, type]);
+
+    return (
+      <div className="mb-4">
+        <label className="block text-gray-300 text-sm font-bold mb-2 flex items-center">
+          {Icon && <Icon size={18} className="mr-2 text-purple-400" />} {/* Ícones sem brilho extra */}
+          {label}
+        </label>
+        {type === 'select' ? (
+          <select
+            value={controlledValue}
+            onChange={handleChangeEvent}
+            className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
+          >
+            <option value="" disabled>{placeholder}</option>
+            {options.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        ) : type === 'multi-select' ? (
+          <select
+            multiple={multiple}
+            value={controlledValue}
+            onChange={handleChangeEvent}
+            className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 h-32 overflow-y-auto glass-effect-input-subtle"
+          >
+            {options.length === 0 && <option value="" disabled>Nenhum personagem guardado. Crie um!</option>}
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>{option.name}</option>
+            ))}
+          </select>
+        ) : type === 'textarea' ? (
+          <textarea
+            value={controlledValue}
+            onChange={handleChangeEvent}
+            placeholder={placeholder}
+            rows="3"
+            className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
+          />
+        ) : type === 'range' ? (
+          <div className="flex items-center space-x-3">
+            <input
+              type="range"
+              min={min}
+              max={max}
+              step={step}
+              value={controlledValue}
+              onChange={handleChangeEvent}
+              className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-purple-500"
+            />
+            <input
+              type="number"
+              value={controlledValue}
+              onChange={handleChangeEvent}
+              className="w-20 shadow appearance-none border border-gray-600 rounded-lg py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              min={min}
+              max={max}
+            />
+          </div>
+        ) : (
+          <input
+            type={type}
+            value={controlledValue}
+            onChange={handleChangeEvent}
+            placeholder={placeholder}
+            className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
+          />
+        )}
+        {tip && <p className="text-gray-400 text-xs mt-1">{tip}</p>}
+      </div>
+    );
+  };
+
+  if (showEntryPage) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-gray-100 font-sans flex flex-col items-center justify-center futuristic-background p-4">
+        <style>
+          {`
+          /* Keyframes para o brilho sutil do texto na página de entrada */
+          @keyframes glow-entry-subtle {
+            0%, 100% { text-shadow: 0 0 1px #fff, 0 0 2px #fff, 0 0 3px rgba(168, 85, 247, 0.4); }
+            50% { text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px rgba(168, 85, 247, 0.6); }
+          }
+          .text-neon-glow-entry {
+            animation: glow-entry-subtle 2.5s ease-in-out infinite alternate;
+          }
+
+          /* Keyframes para o brilho sutil da borda pulsante na página de entrada */
+          @keyframes pulse-border-subtle {
+            0% { border-color: rgba(168, 85, 247, 0.1); box-shadow: 0 0 2px rgba(168, 85, 247, 0.05); }
+            50% { border-color: rgba(168, 85, 247, 0.3); box-shadow: 0 0 5px rgba(168, 85, 247, 0.15); }
+            100% { border-color: rgba(168, 85, 247, 0.1); box-shadow: 0 0 2px rgba(168, 85, 247, 0.05); }
+          }
+          .pulsing-border-subtle {
+            animation: pulse-border-subtle 3.5s infinite ease-in-out;
+          }
+
+          /* Keyframes para o fundo abstrato e dinâmico */
+          @keyframes futuristic-background-animation {
+            0% { background-position: 0% 0%, 50% 50%, 100% 100%; }
+            100% { background-position: 100% 100%, 0% 0%, 50% 50%; }
+          }
+
+          .futuristic-background {
+            background: 
+              radial-gradient(circle at 20% 30%, rgba(168, 85, 247, 0.05) 0%, transparent 40%), /* Roxo mais sutil */
+              radial-gradient(circle at 80% 70%, rgba(59, 130, 246, 0.05) 0%, transparent 40%), /* Azul mais sutil */
+              linear-gradient(160deg, #0a0a0a, #1a1a1a, #0a0a0a); /* Gradiente de cinza escuro para profundidade */
+            background-size: 300% 300%, 300% 300%, 100% 100%;
+            animation: futuristic-background-animation 50s ease infinite alternate; /* Animação mais lenta e suave */
+          }
+
+          /* Efeito de Glassmorphism aprimorado e mais discreto */
+          .glass-effect {
+            background-color: rgba(30, 41, 59, 0.15); /* Mais transparente */
+            backdrop-filter: blur(15px); /* Blur moderado */
+            -webkit-backdrop-filter: blur(15px);
+            border: 1px solid rgba(71, 85, 105, 0.08); /* Borda muito subtil */
+            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.1), inset 0 0 5px rgba(168, 85, 247, 0.02); /* Sombra externa e brilho interno muito sutis */
+          }
+
+          /* Ajustes para brilho dos botões e títulos no resto da app */
+          .text-neon-glow {
+            text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px #a855f7, 0 0 8px #a855f7; /* Brilho mais contido */
+            animation: none; /* Estático na app principal */
+          }
+          
+          button {
+            box-shadow: 0 0 5px rgba(168, 85, 247, 0.2); /* Sombra base mais suave */
+            transition: box-shadow 0.3s ease-in-out, transform 0.1s ease-out;
+          }
+          button:hover {
+            box-shadow: 0 0 15px rgba(168, 85, 247, 0.6), 0 0 25px rgba(168, 85, 247, 0.4); /* Brilho no hover mais definido */
+            transform: translateY(-1px); /* Leve elevação no hover */
+          }
+          .bg-blue-600:hover { box-shadow: 0 0 15px rgba(59, 130, 246, 0.6), 0 0 25px rgba(59, 130, 246, 0.4); }
+          .bg-emerald-600:hover { box-shadow: 0 0 15px rgba(16, 185, 129, 0.6), 0 0 25px rgba(16, 185, 129, 0.4); }
+          .bg-red-600:hover { box-shadow: 0 0 15px rgba(239, 68, 68, 0.6), 0 0 25px rgba(239, 68, 68, 0.4); }
+          .bg-gray-700:hover { box-shadow: 0 0 10px rgba(156, 163, 175, 0.5), 0 0 15px rgba(156, 163, 175, 0.3); }
+
+          .glass-effect-input-subtle {
+            background-color: rgba(45, 55, 72, 0.3); /* bg-gray-700 com opacidade */
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            border: 1px solid rgba(71, 85, 105, 0.1);
+          }
+          `}
+        </style>
+        <div className="text-center">
+          <img
+            src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1"
+            alt="Logo Conecta"
+            className="h-48 md:h-64 w-auto mx-auto mb-8 drop-shadow-[0_0_5px_rgba(168,85,247,0.5)] pulsing-border-subtle rounded-lg"
+            style={{ border: '2px solid transparent' }}
+          />
+          <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-4 text-neon-glow-entry">
+            Bem-vindo ao CinePrompt AI
+          </h1>
+          <p className="text-xl md:text-2xl text-purple-300 font-semibold mb-10">
+            Sua Visão Cinematográfica, Gerada com Inteligência.
+          </p>
+          <button
+            onClick={handleEnterPlatform} // Usa a função com atraso
+            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 px-12 rounded-lg text-xl shadow-lg transition-all duration-300 hover:shadow-purple-500/80 border border-purple-500 relative overflow-hidden"
+          >
+            Entrar na Plataforma
+            <span className="absolute inset-0 bg-white opacity-0 transition-opacity duration-300 hover:opacity-10"></span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-gray-100 font-sans flex flex-col futuristic-background">
+      <style>
+          {`
+          /* Keyframes para o brilho sutil do texto na página de entrada */
+          @keyframes glow-entry-subtle {
+            0%, 100% { text-shadow: 0 0 1px #fff, 0 0 2px #fff, 0 0 3px rgba(168, 85, 247, 0.4); }
+            50% { text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px rgba(168, 85, 247, 0.6); }
+          }
+          .text-neon-glow-entry {
+            animation: glow-entry-subtle 2.5s ease-in-out infinite alternate;
+          }
+
+          /* Keyframes para o brilho sutil da borda pulsante na página de entrada */
+          @keyframes pulse-border-subtle {
+            0% { border-color: rgba(168, 85, 247, 0.1); box-shadow: 0 0 2px rgba(168, 85, 247, 0.05); }
+            50% { border-color: rgba(168, 85, 247, 0.3); box-shadow: 0 0 5px rgba(168, 85, 247, 0.15); }
+            100% { border-color: rgba(168, 85, 247, 0.1); box-shadow: 0 0 2px rgba(168, 85, 247, 0.05); }
+          }
+          .pulsing-border-subtle {
+            animation: pulse-border-subtle 3.5s infinite ease-in-out;
+          }
+
+          /* Keyframes para o fundo abstrato e dinâmico */
+          @keyframes futuristic-background-animation {
+            0% { background-position: 0% 0%, 50% 50%, 100% 100%; }
+            100% { background-position: 100% 100%, 0% 0%, 50% 50%; }
+          }
+
+          .futuristic-background {
+            background: 
+              radial-gradient(circle at 20% 30%, rgba(168, 85, 247, 0.05) 0%, transparent 40%), /* Roxo mais sutil */
+              radial-gradient(circle at 80% 70%, rgba(59, 130, 246, 0.05) 0%, transparent 40%), /* Azul mais sutil */
+              linear-gradient(160deg, #0a0a0a, #1a1a1a, #0a0a0a); /* Gradiente de cinza escuro para profundidade */
+            background-size: 300% 300%, 300% 300%, 100% 100%;
+            animation: futuristic-background-animation 50s ease infinite alternate; /* Animação mais lenta e suave */
+          }
+
+          /* Efeito de Glassmorphism aprimorado e mais discreto */
+          .glass-effect {
+            background-color: rgba(30, 41, 59, 0.15); /* Mais transparente */
+            backdrop-filter: blur(15px); /* Blur moderado */
+            -webkit-backdrop-filter: blur(15px);
+            border: 1px solid rgba(71, 85, 105, 0.08); /* Borda muito subtil */
+            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.1), inset 0 0 5px rgba(168, 85, 247, 0.02); /* Sombra externa e brilho interno muito sutis */
+          }
+
+          /* Ajustes para brilho dos botões e títulos no resto da app */
+          .text-neon-glow {
+            text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px #a855f7, 0 0 8px #a855f7; /* Brilho mais contido */
+            animation: none; /* Estático na app principal */
+          }
+          
+          button {
+            box-shadow: 0 0 5px rgba(168, 85, 247, 0.2); /* Sombra base mais suave */
+            transition: box-shadow 0.3s ease-in-out, transform 0.1s ease-out;
+          }
+          button:hover {
+            box-shadow: 0 0 15px rgba(168, 85, 247, 0.6), 0 0 25px rgba(168, 85, 247, 0.4); /* Brilho no hover mais definido */
+            transform: translateY(-1px); /* Leve elevação no hover */
+          }
+          .bg-blue-600:hover { box-shadow: 0 0 15px rgba(59, 130, 246, 0.6), 0 0 25px rgba(59, 130, 246, 0.4); }
+          .bg-emerald-600:hover { box-shadow: 0 0 15px rgba(16, 185, 129, 0.6), 0 0 25px rgba(16, 185, 129, 0.4); }
+          .bg-red-600:hover { box-shadow: 0 0 15px rgba(239, 68, 68, 0.6), 0 0 25px rgba(239, 68, 68, 0.4); }
+          .bg-gray-700:hover { box-shadow: 0 0 10px rgba(156, 163, 175, 0.5), 0 0 15px rgba(156, 163, 175, 0.3); }
+
+          .glass-effect-input-subtle {
+            background-color: rgba(45, 55, 72, 0.3); /* bg-gray-700 com opacidade */
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            border: 1px solid rgba(71, 85, 105, 0.1);
+          }
+          `}
+        </style>
+      {/* Cabeçalho */}
+      <header className="bg-gray-900 p-4 shadow-lg border-b-2 border-purple-700 glass-effect relative overflow-hidden">
+        {/* Vídeo de Fundo do Cabeçalho */}
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover z-0"
+          // Substitua 'https://www.youtube.com/embed/VIDEO_ID' pelo seu vídeo Veo V3 real
+          // Nota: Para carregar vídeos do YouTube diretamente em um elemento <video>, você precisaria de um serviço de proxy ou API que forneça o URL direto do arquivo de vídeo.
+          // Para demonstração, estou usando um URL de vídeo de stock.
+          // Para vídeos do YouTube, a forma mais comum é usar um iframe, que será coberto pela camada transparente.
+          // Se quiser um vídeo de fundo real, precisará de um URL direto como:
+          // src="https://assets.mixkit.co/videos/preview/mixkit-abstract-particles-moving-4061-large.mp4"
+          // Exemplo de URL de vídeo de stock para demonstração:
+          src="https://assets.mixkit.co/videos/preview/mixkit-abstract-particles-moving-4061-large.mp4"
+          onError={(e) => console.log("Erro ao carregar vídeo:", e)}
+        >
+          Seu navegador não suporta a tag de vídeo.
+        </video>
+        {/* Camada de sobreposição para legibilidade */}
+        <div className="absolute inset-0 bg-black opacity-40 z-10"></div> {/* Camada escura sobre o vídeo */}
+
+        <div className="container mx-auto flex justify-between items-center relative z-20"> {/* Conteúdo sobreposto ao vídeo */}
+          <div className="flex items-center">
+            {/* Logo da Empresa - Aumentada e com sombra para efeito neon */}
+            <img
+              src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1"
+              alt="Logo Conecta"
+              className="h-16 w-auto mr-4 drop-shadow-[0_0_10px_rgba(168,85,247,0.7)]"
+            />
+          </div>
+          {/* Botão de menu para mobile */}
+          <div className="md:hidden">
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-100 focus:outline-none">
+              {isSidebarOpen ? <X size={28} /> : <Menu size={28} />}
+            </button>
+          </div>
+          {/* Navegação Desktop */}
+          <nav className="hidden md:flex space-x-6">
+            <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
+              <LayoutGrid size={18} className="mr-1" /> Templates
+              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+            </a>
+            <button onClick={() => setIsCharacterManagerOpen(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
+              <Users size={18} className="mr-1" /> Meus Personagens
+              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+            </button>
+            <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
+              <History size={18} className="mr-1" /> Histórico
+              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+            </a>
+            <button onClick={() => setShowPlansModal(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
+              <DollarSign size={18} className="mr-1" /> Planos
+              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+            </button>
+            {userId && auth.currentUser && !auth.currentUser.isAnonymous ? (
+              <>
+                <button onClick={() => setShowProfileModal(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
+                  <UserCircle size={18} className="mr-1" /> Meu Perfil
+                  <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+                </button>
+                <button onClick={handleLogout} className="text-gray-300 hover:text-red-400 transition-colors duration-200 flex items-center group relative">
+                  <LogOut size={18} className="mr-1" /> Sair
+                  <span className="absolute bottom-0 left-0 w-full h-0.5 bg-red-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+                </button>
+              </>
+            ) : (
+              <button onClick={() => setShowAuthModal(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
+                <LogIn size={18} className="mr-1" /> Login / Cadastro
+                <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+              </button>
+            )}
+          </nav>
+        </div>
+      </header>
+
+      {/* Subtítulo Impactante */}
+      <div className="w-full text-center py-4 bg-gray-900 border-b border-gray-700 shadow-inner glass-effect">
+        <h2 className="text-xl md:text-3xl font-extrabold text-white drop-shadow-[0_0_4px_rgba(255,255,255,0.4)] text-neon-glow-subtle">
+          Seu Prompt, Resultado Cinematográfico
+        </h2>
+        <p className="text-md md:text-xl text-purple-400 font-semibold mt-1">
+          Um Clique para o Cinema
+        </p>
+      </div>
+
+      {/* Sidebar para Mobile */}
+      <div className={`fixed inset-y-0 right-0 w-64 bg-gray-900 z-50 transform ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'} transition-transform duration-300 ease-in-out md:hidden glass-effect`}>
+        <div className="p-4 flex justify-between items-center border-b border-gray-700">
+          <h2 className="text-xl font-bold text-purple-500">Menu</h2>
+          <button onClick={() => setIsSidebarOpen(false)} className="text-gray-100 focus:outline-none">
+            <X size={28} />
+          </button>
+        </div>
+        <nav className="flex flex-col p-4 space-y-4">
+          <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center" onClick={() => setIsSidebarOpen(false)}>
+            <LayoutGrid size={18} className="mr-2" /> Templates
+          </a>
+          <button onClick={() => { setIsCharacterManagerOpen(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left">
+            <Users size={18} className="mr-2" /> Meus Personagens
+          </button>
+          <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center" onClick={() => setIsSidebarOpen(false)}>
+            <History size={18} className="mr-2" /> Histórico
+          </a>
+          <button onClick={() => { setShowPlansModal(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left">
+            <DollarSign size={18} className="mr-2" /> Planos
+          </button>
+          {userId && auth.currentUser && !auth.currentUser.isAnonymous ? (
+            <>
+              <button onClick={() => { setShowProfileModal(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left">
+                <UserCircle size={18} className="mr-2" /> Meu Perfil
+              </button>
+              <button onClick={() => { handleLogout(); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-red-400 transition-colors duration-200 flex items-center w-full text-left">
+                <LogOut size={18} className="mr-2" /> Sair
+              </button>
+            </>
+          ) : (
+            <button onClick={() => { setShowAuthModal(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left">
+              <LogIn size={18} className="mr-2" /> Login / Cadastro
+            </button>
+          )}
+        </nav>
+      </div>
+
+      {/* Mensagem de Feedback Global */}
+      {feedbackMessage.text && (
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 p-3 rounded-lg shadow-xl flex items-center space-x-2
+          ${feedbackMessage.type === 'success' ? 'bg-green-600' : 'bg-red-600'} text-white transition-all duration-300 ease-in-out`}>
+          {feedbackMessage.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+          <span>{feedbackMessage.text}</span>
+        </div>
+      )}
+
+      {/* Modal de Autenticação */}
+      {showAuthModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-md border border-purple-700 glass-effect">
+            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
+                {isRegisterMode ? <UserPlus size={24} className="mr-2" /> : <LogIn size={24} className="mr-2" />}
+                {isRegisterMode ? 'Registrar' : 'Login'}
+              </h2>
+              <button onClick={() => setShowAuthModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                <X size={28} />
+              </button>
+            </div>
+            <form onSubmit={(e) => { e.preventDefault(); isRegisterMode ? handleRegister() : handleLogin(); }}>
+              <InputField label="E-mail" icon={Mail} type="email" value={authEmail} onChange={handleSetAuthEmail} placeholder="seu@email.com" />
+              <InputField label="Senha" icon={Lock} type="password" value={authPassword} onChange={handleSetAuthPassword} placeholder="••••••••" />
+              <button
+                type="submit"
+                className="mt-4 w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50"
+              >
+                {isRegisterMode ? 'Registrar' : 'Entrar'}
+              </button>
+            </form>
+            <div className="mt-6 text-center text-gray-400">
+              {isRegisterMode ? (
+                <span>Já tem uma conta? <button onClick={() => setIsRegisterMode(false)} className="text-blue-400 hover:underline">Faça Login</button></span>
+              ) : (
+                <span>Não tem uma conta? <button onClick={() => setIsRegisterMode(true)} className="text-blue-400 hover:underline">Cadastre-se</button></span>
+              )}
+            </div>
+            <div className="mt-4 border-t border-gray-700 pt-4">
+              <button
+                onClick={handleGoogleSignIn}
+                className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-red-500/50 flex items-center justify-center"
+              >
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-6 h-6 mr-2" />
+                Entrar com Google
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Perfil do Usuário */}
+      {showProfileModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-md border border-purple-700 glass-effect">
+            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
+                <UserCircle size={24} className="mr-2" /> Meu Perfil
+              </h2>
+              <button onClick={() => setShowProfileModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                <X size={28} />
+              </button>
+            </div>
+            <div className="mb-4">
+              <p className="text-gray-300 text-sm font-bold mb-2">E-mail:</p>
+              <p className="text-gray-100 bg-gray-700 p-2 rounded-lg">{userEmail}</p>
+            </div>
+            <InputField
+              label="CPF"
+              icon={CreditCard}
+              type="text"
+              value={userCPF}
+              onChange={handleSetUserCPF}
+              placeholder="000.000.000-00"
+              tip="Seu CPF será usado apenas para identificação da conta."
+            />
+            <button
+              onClick={handleSaveProfile}
+              className="mt-4 w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50"
+            >
+              <Save size={20} className="mr-2" /> Salvar Perfil
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Planos de Assinatura */}
+      {showPlansModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-3xl border border-purple-700 glass-effect">
+            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
+                <DollarSign size={24} className="mr-2" /> Nossos Planos
+              </h2>
+              <button onClick={() => setShowPlansModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                <X size={28} />
+              </button>
+            </div>
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Plano Gratuito */}
+              <div className="bg-gray-700 p-6 rounded-lg border border-gray-600 shadow-md flex flex-col glass-effect">
+                <h3 className="text-2xl font-bold text-blue-400 mb-3">Gratuito</h3>
+                <p className="text-gray-300 mb-4">Perfeito para começar e experimentar a ferramenta.</p>
+                <p className="text-4xl font-extrabold text-white mb-4">R$ 0<span className="text-lg text-gray-400">/mês</span></p>
+                <ul className="list-disc list-inside text-gray-300 flex-grow">
+                  <li>3 prompts por dia</li>
+                  <li>Acesso limitado a templates</li>
+                  <li>Gerenciamento de 1 personagem</li>
+                  <li>Suporte básico</li>
+                </ul>
+                <button className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-blue-500/50">
+                  Plano Atual
+                </button>
+              </div>
+
+              {/* Plano Pro */}
+              <div className="bg-gradient-to-br from-purple-800 to-gray-800 p-6 rounded-lg border border-purple-500 shadow-xl flex flex-col relative overflow-hidden glass-effect">
+                <span className="absolute top-0 right-0 bg-yellow-500 text-gray-900 text-xs font-bold px-3 py-1 rounded-bl-lg">MAIS POPULAR</span>
+                <h3 className="text-2xl font-bold text-purple-300 mb-3">Pro</h3>
+                <p className="text-gray-300 mb-4">Para criadores e estúdios que buscam resultados ilimitados.</p>
+                <p className="text-4xl font-extrabold text-white mb-4">R$ 49,90<span className="text-lg text-gray-400">/mês</span></p>
+                <ul className="list-disc list-inside text-gray-300 flex-grow">
+                  <li>Prompts ilimitados</li>
+                  <li>Acesso a todos os templates premium</li>
+                  <li>Gerenciamento ilimitado de personagens</li>
+                  <li>Suporte prioritário</li>
+                  <li>Exportação para .json (futuro)</li>
+                </ul>
+                <button className="mt-6 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-emerald-500/50">
+                  Assinar Plano Pro
+                </button>
+              </div>
+            </div>
+            <p className="text-gray-400 text-sm mt-6 text-center">
+              *Os valores das mensalidades são para fins de demonstração. Em um sistema real, seriam configurados via painel administrativo e processados por um gateway de pagamento como o Stripe.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Gerenciamento de Personagens */}
+      {isCharacterManagerOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto border border-purple-700 glass-effect">
+            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
+                <Users size={24} className="mr-2" /> Meus Personagens
+              </h2>
+              <button onClick={() => { setIsCharacterManagerOpen(false); setEditingCharacter(null); setNewCharacterName(''); setNewCharacterDescription(''); setNewCharacterVisuals(''); setNewCharacterPersonality(''); }} className="text-gray-400 hover:text-white transition-colors">
+                <X size={28} />
+              </button>
+            </div>
+
+            {/* Formulário para Adicionar/Editar Personagem */}
+            <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect">
+              <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
+                {editingCharacter ? <PenSquare size={20} className="mr-2" /> : <PlusCircle size={20} className="mr-2" />}
+                {editingCharacter ? `Editar Personagem: ${editingCharacter.name}` : 'Adicionar Novo Personagem'}
+              </h3>
+              <InputField label="Nome do Personagem" value={newCharacterName} onChange={handleSetNewCharacterName} placeholder="Ex: Capitão Estelar" />
+              <InputField label="Descrição / Papel" type="textarea" value={newCharacterDescription} onChange={handleSetNewCharacterDescription} placeholder="Ex: Um líder corajoso, explorador de galáxias..." />
+              <InputField label="Traços Visuais" type="textarea" value={newCharacterVisuals} onChange={handleSetNewCharacterVisuals} placeholder="Ex: Armadura futurista azul, cabelo loiro esvoaçante, cicatriz no olho direito..." tip="Detalhes de aparência física para consistência visual." />
+              <InputField label="Traços de Personalidade" type="textarea" value={newCharacterPersonality} onChange={handleSetNewCharacterPersonality} placeholder="Ex: Determinado, sarcástico, leal, com um senso de humor seco..." tip="Características psicológicas para consistência de comportamento." />
+              <button
+                onClick={handleSaveCharacter}
+                className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50"
+              >
+                <Save size={20} className="mr-2" /> {editingCharacter ? 'Atualizar Personagem' : 'Salvar Personagem'}
+              </button>
+              {editingCharacter && (
+                <button
+                  onClick={() => { setEditingCharacter(null); setNewCharacterName(''); setNewCharacterDescription(''); setNewCharacterVisuals(''); setNewCharacterPersonality(''); }}
+                  className="mt-4 ml-4 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-2 px-4 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-gray-500/50 border border-gray-600"
+                >
+                  <X size={20} className="mr-2" /> Cancelar Edição
+                </button>
+              )}
+            </div>
+
+            {/* Lista de Personagens Salvos */}
+            <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
+              <Users size={20} className="mr-2" /> Personagens Salvos ({userCharacters.length})
+            </h3>
+            {userCharacters.length === 0 ? (
+              <p className="text-gray-400 text-center py-4">Nenhum personagem salvo ainda. Crie um acima!</p>
+            ) : (
+              <div className="space-y-4">
+                {userCharacters.map((char) => (
+                  <div key={char.id} className="bg-gray-700 p-4 rounded-lg shadow-md flex justify-between items-center border border-gray-600 hover:border-blue-500 transition-colors duration-200 glass-effect">
+                    <div>
+                      <p className="font-bold text-lg text-purple-300">{char.name}</p>
+                      {char.description && <p className="text-sm text-gray-300 mt-1">{char.description}</p>}
+                      {char.visualTraits && <p className="text-xs text-gray-400 mt-1">Visuais: {char.visualTraits}</p>}
+                      {char.personalityTraits && <p className="text-xs text-gray-400 mt-1">Personalidade: {char.personalityTraits}</p>}
+                    </div>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleEditCharacter(char)}
+                        className="p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all duration-300 transform hover:scale-110 hover:shadow-blue-500/50"
+                        title="Editar"
+                      >
+                        <PenSquare size={18} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCharacter(char.id, char.name)}
+                        className="p-2 rounded-full bg-red-600 hover:bg-red-700 text-white transition-all duration-300 transform hover:scale-110 hover:shadow-red-500/50"
+                        title="Excluir"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Conteúdo Principal */}
+      <main className="container mx-auto flex-grow p-4 md:p-8">
+        <div className="lg:grid lg:grid-cols-2 lg:gap-8 flex flex-col">
+          {/* Painel de Controles */}
+          <section className="p-6 rounded-xl shadow-lg mb-8 lg:mb-0 border border-purple-800 glass-effect">
+            <h2 className="text-2xl font-bold text-purple-400 mb-6 flex items-center text-neon-glow">
+              <Sparkles size={24} className="mr-2" /> Crie Seu Prompt de Vídeo IA
+            </h2>
+            <form>
+              <InputField
+                key="videoStyle"
+                label="Estilo do Vídeo"
+                icon={Film}
+                type="select"
+                value={videoStyle}
+                onChange={handleSetVideoStyle}
+                placeholder="Selecione o estilo principal..."
+                options={videoStyleOptions}
+              />
+              <InputField
+                key="theme"
+                label="Tema ou Ambiente"
+                icon={Building}
+                value={theme}
+                onChange={handleSetTheme}
+                placeholder="Ex: Floresta mística ao amanhecer, metrópole cyberpunk..."
+              />
+              <InputField
+                key="narrative"
+                label="Narrativa / Descrição da História"
+                icon={Edit}
+                type="textarea"
+                value={narrative}
+                onChange={handleSetNarrative}
+                placeholder="Descreva brevemente a ação principal ou a cena. Ex: Um explorador solitário encontra um artefato antigo..."
+                tip="Seja conciso, mas descritivo."
+              />
+              <div className="mb-4">
+                <label className="block text-gray-300 text-sm font-bold mb-2 flex items-center">
+                  <User size={18} className="mr-2 text-purple-400" />
+                  Personagens / Figuras
+                </label>
+                <InputField
+                  key="characters"
+                  type="multi-select"
+                  value={characters}
+                  onChange={handleSelectCharacterInPrompt}
+                  options={userCharacters}
+                  multiple={true}
+                  placeholder="Selecione personagens salvos ou crie um novo..."
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsCharacterManagerOpen(true)}
+                  className="mt-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm py-2 px-4 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50"
+                >
+                  <PlusCircle size={16} className="mr-2" /> Gerenciar Personagens
+                </button>
+              </div>
+
+              <InputField
+                key="cameraType"
+                label="Tipo de Câmera / Movimento"
+                icon={Camera}
+                type="select"
+                value={cameraType}
+                onChange={handleSetCameraType}
+                placeholder="Escolha o movimento da câmera..."
+                options={cameraTypeOptions}
+              />
+              <InputField
+                key="lighting"
+                label="Iluminação"
+                icon={Lightbulb}
+                type="select"
+                value={lighting}
+                onChange={handleSetLighting}
+                placeholder="Defina a atmosfera de luz..."
+                options={lightingOptions}
+              />
+              <InputField
+                key="colorPalette"
+                label="Paleta de Cores"
+                icon={Palette}
+                type="select"
+                value={colorPalette}
+                onChange={handleSetColorPalette}
+                placeholder="Selecione a cor dominante ou o esquema..."
+                options={colorPaletteOptions}
+                tip="Selecione a cor dominante ou o esquema."
+              />
+              <InputField
+                key="duration"
+                label="Duração (segundos)"
+                icon={Clock}
+                type="range"
+                value={duration}
+                onChange={handleSetDuration}
+                min={1}
+                max={60}
+                step={1}
+              />
+              <InputField
+                key="format"
+                label="Formato"
+                icon={Crop}
+                type="select"
+                value={format}
+                onChange={handleSetFormat}
+                placeholder="Selecione a proporção do vídeo..."
+                options={formatOptions}
+              />
+              <InputField
+                key="quality"
+                label="Qualidade e Detalhes"
+                icon={Sparkles}
+                value={quality}
+                onChange={handleSetQuality}
+                placeholder="Ex: 4K, 24fps, realismo fotorrealista, detalhes intrincados..."
+                tip="Adicione especificações técnicas ou artísticas."
+              />
+              <InputField
+                key="outputLanguage"
+                label="Idioma do Prompt Final"
+                icon={Languages}
+                type="select"
+                value={outputLanguage}
+                onChange={handleSetOutputLanguage}
+                placeholder="Selecione o idioma do prompt..."
+                options={outputLanguageOptions}
+              />
+              <InputField
+                key="voiceNarration"
+                label="Voz / Narração"
+                icon={Mic}
+                type="select"
+                value={voiceNarration}
+                onChange={handleSetVoiceNarration}
+                placeholder="Selecione a voz ou narração..."
+                options={voiceNarrationOptions}
+              />
+            </form>
+          </section>
+
+          {/* Pré-visualização do Prompt */}
+          <section className="p-6 rounded-xl shadow-lg flex flex-col border border-purple-800 glass-effect">
+            <h2 className="text-2xl font-bold text-purple-400 mb-6 flex items-center text-neon-glow">
+              <Sparkles size={24} className="mr-2" /> Resultado Final do Prompt
+            </h2>
+            <div className="flex-grow relative">
+              <textarea
+                readOnly={!isManualInputMode} // Torna editável no modo manual
+                value={isLoadingPrompt && !isManualInputMode ? 'Gerando prompt com IA... por favor, aguarde.' : generatedPrompt}
+                onChange={(e) => isManualInputMode && setGeneratedPrompt(e.target.value)} // Permite edição no modo manual
+                className={`w-full h-full min-h-[200px] bg-gray-700 text-gray-100 font-mono p-4 rounded-lg resize-none focus:outline-none ${isLoadingPrompt && !isManualInputMode ? 'opacity-70 italic' : ''} border border-blue-700`}
+                placeholder="Seu prompt gerado aparecerá aqui... ou escreva o seu próprio prompt aqui no modo manual."
+              ></textarea>
+              {isLoadingPrompt && !isManualInputMode && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-700 bg-opacity-75 rounded-lg">
+                  <Loader2 size={48} className="animate-spin text-purple-400" />
+                </div>
+              )}
+            </div>
+            <div className="mt-6 flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4 justify-center">
+              {!isManualInputMode ? (
+                <button
+                  onClick={generatePromptWithAI}
+                  disabled={isLoadingPrompt}
+                  className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-purple-500/50 disabled:opacity-50 disabled:cursor-not-allowed border border-purple-500"
+                >
+                  {isLoadingPrompt ? (
+                    <>
+                      <Loader2 size={20} className="mr-2 animate-spin" /> Gerando...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={20} className="mr-2" /> Gerar com IA
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    setGeneratedPrompt(''); // Limpa o prompt para nova escrita
+                    setIsManualInputMode(false); // Volta para o modo AI se quiser gerar
+                  }}
+                  className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50 border border-gray-600"
+                >
+                  <RotateCcw size={20} className="mr-2" /> Voltar ao Modo IA
+                </button>
+              )}
+
+              <button
+                onClick={() => setIsManualInputMode(!isManualInputMode)}
+                className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50 border border-gray-600"
+              >
+                <Type size={20} className="mr-2" /> {isManualInputMode ? 'Modo IA' : 'Introduzir Manualmente'}
+              </button>
+
+              <button
+                onClick={copyPrompt}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-blue-500/50 border border-blue-500"
+              >
+                <Copy size={20} className="mr-2" /> Copiar Prompt
+                {showCopiedMessage && (
+                  <span className="absolute -top-8 left-1/2 -translate-x-1/2 bg-green-500 text-white text-xs px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    Copiado!
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={resetForm}
+                className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50 border border-gray-600"
+              >
+                <RotateCcw size={20} className="mr-2" /> Limpar Campos
+              </button>
+              <button
+                onClick={savePrompt}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-emerald-500/50 border border-emerald-500"
+              >
+                <Save size={20} className="mr-2" /> Salvar Prompt
+              </button>
+            </div>
+          </section>
+        </div>
+
+        {/* Secção de Vídeos do YouTube */}
+        <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
+          <h2 className="text-2xl font-bold text-purple-400 mb-6 flex items-center text-neon-glow">
+            <Youtube size={24} className="mr-2" /> Visualizador de Vídeos YouTube
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <InputField
+                label="ID do Vídeo YouTube 1"
+                value={youtubeVideoId1}
+                onChange={handleSetYoutubeVideoId1}
+                placeholder="Ex: dQw4w9WgXcQ"
+                tip="Cole apenas o ID do vídeo (a parte final do URL)."
+              />
+              {youtubeVideoId1 && (
+                <div className="relative w-full overflow-hidden rounded-lg shadow-lg border border-gray-700" style={{ paddingTop: '56.25%' }}> {/* 16:9 Aspect Ratio */}
+                  <iframe
+                    className="absolute top-0 left-0 w-full h-full"
+                    src={`https://www.youtube.com/embed/${youtubeVideoId1}`}
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                    title="YouTube video player 1"
+                  ></iframe>
+                </div>
+              )}
+            </div>
+            <div>
+              <InputField
+                label="ID do Vídeo YouTube 2"
+                value={youtubeVideoId2}
+                onChange={handleSetYoutubeVideoId2}
+                placeholder="Ex: dQw4w9WgXcQ"
+              />
+              {youtubeVideoId2 && (
+                <div className="relative w-full overflow-hidden rounded-lg shadow-lg border border-gray-700" style={{ paddingTop: '56.25%' }}>
+                  <iframe
+                    className="absolute top-0 left-0 w-full h-full"
+                    src={`https://www.youtube.com/embed/${youtubeVideoId2}`}
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                    title="YouTube video player 2"
+                  ></iframe>
+                </div>
+              )}
+            </div>
+            <div>
+              <InputField
+                label="ID do Vídeo YouTube 3"
+                value={youtubeVideoId3}
+                onChange={handleSetYoutubeVideoId3}
+                placeholder="Ex: dQw4w9WgXcQ"
+              />
+              {youtubeVideoId3 && (
+                <div className="relative w-full overflow-hidden rounded-lg shadow-lg border border-gray-700" style={{ paddingTop: '56.25%' }}>
+                  <iframe
+                    className="absolute top-0 left-0 w-full h-full"
+                    src={`https://www.youtube.com/embed/${youtubeVideoId3}`}
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                    title="YouTube video player 3"
+                  ></iframe>
+                </div>
+              )}
+            </div>
+            <div>
+              <InputField
+                label="ID do Vídeo YouTube 4"
+                value={youtubeVideoId4}
+                onChange={handleSetYoutubeVideoId4}
+                placeholder="Ex: dQw4w9WgXcQ"
+              />
+              {youtubeVideoId4 && (
+                <div className="relative w-full overflow-hidden rounded-lg shadow-lg border border-gray-700" style={{ paddingTop: '56.25%' }}>
+                  <iframe
+                    className="absolute top-0 left-0 w-full h-full"
+                    src={`https://www.youtube.com/embed/${youtubeVideoId4}`}
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                    title="YouTube video player 4"
+                  ></iframe>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Secção de Histórico de Prompts (apenas para visualização) */}
+        {userId && userPrompts.length > 0 && (
+          <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
+            <h2 className="text-2xl font-bold text-purple-400 mb-6 flex items-center text-neon-glow">
+              <History size={24} className="mr-2" /> Seu Histórico de Prompts
+            </h2>
+            <div className="space-y-4">
+              {userPrompts.map((p) => (
+                <div key={p.id} className="bg-gray-700 p-4 rounded-lg shadow-md border border-gray-600 hover:border-blue-500 transition-colors duration-300">
+                  <p className="font-mono text-sm text-gray-200 break-words">{p.prompt}</p>
+                  <p className="text-xs text-gray-400 mt-2">
+                    Criado em: {new Date(p.createdAt.toDate()).toLocaleString()}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </main>
+
+      {/* Rodapé - ID do Usuário */}
+      <footer className="bg-gray-900 p-4 text-center text-gray-400 text-sm border-t-2 border-purple-700 glass-effect">
+        {userId && (
+          <span>
+            ID do Usuário: <span className="font-mono text-xs">{userId}</span>
+          </span>
+        )}
+      </footer>
+    </div>
+  );
+};
+
+export default App;
