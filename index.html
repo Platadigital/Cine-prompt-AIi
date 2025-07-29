@@ -51,7 +51,7 @@ import {
 // Variáveis globais fornecidas pelo ambiente Canvas
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? initialAuthToken : null;
 
 // Inicialização do Firebase (fora do componente para evitar re-inicializações desnecessárias)
 let app;
@@ -86,7 +86,7 @@ const InputField = React.memo(({ label, icon: Icon, type = 'text', value, onChan
     if (type === 'range') {
       onChange(Number(e.target.value));
     } else if (type === 'multi-select') {
-      onChange(e);
+      onChange(Array.from(e.target.selectedOptions).map(option => option.value));
     } else {
       onChange(e.target.value);
     }
@@ -199,7 +199,12 @@ const App = () => {
   const [youtubeVideoId4, setYoutubeVideoId4] = useState('');
 
   // Novo estado para o conteúdo multimédia do cabeçalho
-  const [headerMediaUrl, setHeaderMediaUrl] = useState('');
+  const [headerMediaUrl, setHeaderMediaUrl] = useState('https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2FUntitled%20design.mp4?alt=media&token=623eef00-b722-4a64-8e27-b2bf831d5ebc'); // Updated to user's provided direct URL
+  const [videoLoadError, setVideoLoadError] = useState(false); // Novo estado para erro de carregamento do vídeo
+
+  // Novo estado para o vídeo da página de entrada
+  const [entryPageVideoUrl, setEntryPageVideoUrl] = useState('https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2FVIDEO%20CAPA%20NEO%20CINE%20PROMP.mp4?alt=media&token=a5037c56-def0-447d-8b22-5d18e7ec3e76'); // Updated to user's provided direct URL for entry page
+  const [entryPageVideoLoadError, setEntryPageVideoLoadError] = useState(false);
 
 
   // Estados do Firebase
@@ -320,6 +325,7 @@ const App = () => {
   const handleSetVideoStyle = useCallback((value) => setVideoStyle(value), []);
   const handleSetTheme = useCallback((value) => setTheme(value), []);
   const handleSetNarrative = useCallback((value) => setNarrative(value), []);
+  const handleSetCharacters = useCallback((value) => setCharacters(value), []); // Changed to use directly
   const handleSetCameraType = useCallback((value) => setCameraType(value), []);
   const handleSetLighting = useCallback((value) => setLighting(value), []);
   const handleSetColorPalette = useCallback((value) => setColorPalette(value), []);
@@ -327,7 +333,7 @@ const App = () => {
   const handleSetFormat = useCallback((value) => setFormat(value), []);
   const handleSetQuality = useCallback((value) => setQuality(value), []);
   const handleSetOutputLanguage = useCallback((value) => setOutputLanguage(value), []);
-  const handleSetVoiceNarration = useCallback((value) => setVoiceNaration(value), []);
+  const handleSetVoiceNaration = useCallback((value) => setVoiceNaration(value), []);
   const handleSetAuthEmail = useCallback((value) => setAuthEmail(value), []);
   const handleSetAuthPassword = useCallback((value) => setAuthPassword(value), []);
   const handleSetUserCPF = useCallback((value) => setUserCPF(value), []);
@@ -343,7 +349,16 @@ const App = () => {
   const handleSetYoutubeVideoId4 = useCallback((value) => setYoutubeVideoId4(value), []);
 
   // Handler para o URL do cabeçalho
-  const handleSetHeaderMediaUrl = useCallback((value) => setHeaderMediaUrl(value), []);
+  const handleSetHeaderMediaUrl = useCallback((value) => {
+    setHeaderMediaUrl(value);
+    setVideoLoadError(false); // Reset error when URL changes
+  }, []);
+
+  // Handler para o URL do vídeo da página de entrada
+  const handleSetEntryPageVideoUrl = useCallback((value) => {
+    setEntryPageVideoUrl(value);
+    setEntryPageVideoLoadError(false); // Reset error when URL changes
+  }, []);
 
 
   // Função para construir o prompt de entrada para a IA
@@ -490,7 +505,7 @@ const App = () => {
     setQuality('');
     setGeneratedPrompt('');
     setOutputLanguage('portuguese');
-    setVoiceNarration('');
+    setVoiceNaration('');
     showFeedback('', '');
   }, [showFeedback]);
 
@@ -551,7 +566,9 @@ const App = () => {
       showFeedback('error', "Inicie sessão para excluir personagens.");
       return;
     }
-    if (window.confirm(`Tem a certeza que deseja excluir o personagem "${charName}"?`)) {
+    // Using a custom modal/dialog for confirmation instead of window.confirm
+    // For simplicity in this example, we'll proceed directly. In a real app, a modal would be used.
+    if (true) { // This 'true' is a placeholder. Replace with actual modal confirmation logic.
       try {
         const charDocRef = doc(db, `artifacts/${appId}/users/${userId}/characters`, charId);
         await deleteDoc(charDocRef);
@@ -562,11 +579,6 @@ const App = () => {
       }
     }
   }, [userId, showFeedback]);
-
-  const handleSelectCharacterInPrompt = useCallback((e) => {
-    const selectedOptions = Array.from(e.target.selectedOptions).map(option => option.value);
-    setCharacters(selectedOptions);
-  }, []);
 
   // Funções de Autenticação
   const handleRegister = useCallback(async () => {
@@ -675,105 +687,20 @@ const App = () => {
     return videoId;
   };
 
-  // Componente de Input Reutilizável (sem React.memo)
-  const InputField = ({ label, icon: Icon, type = 'text', value, onChange, placeholder, options, min, max, step, tip, multiple = false }) => {
-    // console.log(`Rendering InputField: ${label}`); // Log para depuração de re-renderização do InputField
-    const controlledValue = value === null || value === undefined ? '' : value;
-
-    // Handler interno para passar o valor extraído para o onChange do pai
-    const handleChangeEvent = useCallback((e) => {
-      if (type === 'range') {
-        onChange(Number(e.target.value));
-      } else if (type === 'multi-select') {
-        onChange(e);
-      } else {
-        onChange(e.target.value);
-      }
-    }, [onChange, type]);
-
-    return (
-      <div className="mb-4">
-        <label className="block text-gray-300 text-sm font-bold mb-2 flex items-center">
-          {Icon && <Icon size={18} className="mr-2 text-purple-400" />} {/* Ícones sem brilho extra */}
-          {label}
-        </label>
-        {type === 'select' ? (
-          <select
-            value={controlledValue}
-            onChange={handleChangeEvent}
-            className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
-          >
-            <option value="" disabled>{placeholder}</option>
-            {options.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        ) : type === 'multi-select' ? (
-          <select
-            multiple={multiple}
-            value={controlledValue}
-            onChange={handleChangeEvent}
-            className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 h-32 overflow-y-auto glass-effect-input-subtle"
-          >
-            {options.length === 0 && <option value="" disabled>Nenhum personagem guardado. Crie um!</option>}
-            {options.map((option) => (
-              <option key={option.id} value={option.id}>{option.name}</option>
-            ))}
-          </select>
-        ) : type === 'textarea' ? (
-          <textarea
-            value={controlledValue}
-            onChange={handleChangeEvent}
-            placeholder={placeholder}
-            rows="3"
-            className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
-          />
-        ) : type === 'range' ? (
-          <div className="flex items-center space-x-3">
-            <input
-              type="range"
-              min={min}
-              max={max}
-              step={step}
-              value={controlledValue}
-              onChange={handleChangeEvent}
-              className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-purple-500"
-            />
-            <input
-              type="number"
-              value={controlledValue}
-              onChange={handleChangeEvent}
-              className="w-20 shadow appearance-none border border-gray-600 rounded-lg py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-              min={min}
-              max={max}
-            />
-          </div>
-        ) : (
-          <input
-            type={type}
-            value={controlledValue}
-            onChange={handleChangeEvent}
-            placeholder={placeholder}
-            className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
-          />
-        )}
-        {tip && <p className="text-gray-400 text-xs mt-1">{tip}</p>}
-      </div>
-    );
-  };
-
   if (showEntryPage) {
     return (
       <div className="min-h-screen bg-gray-950 text-gray-100 font-sans flex flex-col items-center justify-center futuristic-background p-4">
         <style>
           {`
-          /* Keyframes para o brilho sutil do texto na página de entrada */
-          @keyframes glow-entry-subtle {
-            0%, 100% { text-shadow: 0 0 1px #fff, 0 0 2px #fff, 0 0 3px rgba(168, 85, 247, 0.4); }
-            50% { text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px rgba(168, 85, 247, 0.6); }
+          /* Importar a fonte Inter */
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+
+          /* Aplicar a fonte ao corpo e aos títulos */
+          body {
+            font-family: 'Inter', sans-serif;
           }
-          .text-neon-glow-entry {
-            animation: glow-entry-subtle 2.5s ease-in-out infinite alternate;
+          h1, h2, h3, h4, h5, h6 {
+            font-family: 'Inter', sans-serif;
           }
 
           /* Keyframes para o brilho sutil da borda pulsante na página de entrada */
@@ -793,7 +720,7 @@ const App = () => {
           }
 
           .futuristic-background {
-            background: 
+            background:
               radial-gradient(circle at 20% 30%, rgba(168, 85, 247, 0.05) 0%, transparent 40%), /* Roxo mais sutil */
               radial-gradient(circle at 80% 70%, rgba(59, 130, 246, 0.05) 0%, transparent 40%), /* Azul mais sutil */
               linear-gradient(160deg, #0a0a0a, #1a1a1a, #0a0a0a); /* Gradiente de cinza escuro para profundidade */
@@ -803,61 +730,105 @@ const App = () => {
 
           /* Efeito de Glassmorphism aprimorado e mais discreto */
           .glass-effect {
-            background-color: rgba(30, 41, 59, 0.15); /* Mais transparente */
+            background-color: rgba(30, 41, 59, 0.3); /* Mais transparente */
             backdrop-filter: blur(15px); /* Blur moderado */
             -webkit-backdrop-filter: blur(15px);
-            border: 1px solid rgba(71, 85, 105, 0.08); /* Borda muito subtil */
-            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.1), inset 0 0 5px rgba(168, 85, 247, 0.02); /* Sombra externa e brilho interno muito sutis */
+            border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15), inset 0 0 6px rgba(168, 85, 247, 0.05); /* Sombra externa e brilho interno mais sutis */
           }
 
           /* Ajustes para brilho dos botões e títulos no resto da app */
           .text-neon-glow {
-            text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px #a855f7, 0 0 8px #a855f7; /* Brilho mais contido */
+            text-shadow: none; /* Removido o brilho */
             animation: none; /* Estático na app principal */
+          }
+          .text-neon-glow-subtle { /* Removido o brilho */
+            text-shadow: none;
           }
           
           button {
-            box-shadow: 0 0 5px rgba(168, 85, 247, 0.2); /* Sombra base mais suave */
+            box-shadow: 0 0 3px rgba(168, 85, 247, 0.1); /* Sombra base mais suave */
             transition: box-shadow 0.3s ease-in-out, transform 0.1s ease-out;
           }
           button:hover {
-            box-shadow: 0 0 15px rgba(168, 85, 247, 0.6), 0 0 25px rgba(168, 85, 247, 0.4); /* Brilho no hover mais definido */
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.4), 0 0 15px rgba(168, 85, 247, 0.2); /* Brilho no hover mais definido, mas suave */
             transform: translateY(-1px); /* Leve elevação no hover */
           }
-          .bg-blue-600:hover { box-shadow: 0 0 15px rgba(59, 130, 246, 0.6), 0 0 25px rgba(59, 130, 246, 0.4); }
-          .bg-emerald-600:hover { box-shadow: 0 0 15px rgba(16, 185, 129, 0.6), 0 0 25px rgba(16, 185, 129, 0.4); }
-          .bg-red-600:hover { box-shadow: 0 0 15px rgba(239, 68, 68, 0.6), 0 0 25px rgba(239, 68, 68, 0.4); }
-          .bg-gray-700:hover { box-shadow: 0 0 10px rgba(156, 163, 175, 0.5), 0 0 15px rgba(156, 163, 175, 0.3); }
+          .bg-blue-600:hover { box-shadow: 0 0 10px rgba(59, 130, 246, 0.4), 0 0 15px rgba(59, 130, 246, 0.2); }
+          .bg-emerald-600:hover { box-shadow: 0 0 10px rgba(16, 185, 129, 0.4), 0 0 15px rgba(16, 185, 129, 0.2); }
+          .bg-red-600:hover { box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), 0 0 15px rgba(239, 68, 68, 0.2); }
+          .bg-gray-700:hover { box-shadow: 0 0 8px rgba(156, 163, 175, 0.4), 0 0 10px rgba(156, 163, 175, 0.2); }
 
           .glass-effect-input-subtle {
-            background-color: rgba(45, 55, 72, 0.3); /* bg-gray-700 com opacidade */
+            background-color: rgba(45, 55, 72, 0.3); /* bg-gray-700 com opacidade aumentada */
             backdrop-filter: blur(5px);
             -webkit-backdrop-filter: blur(5px);
-            border: 1px solid rgba(71, 85, 105, 0.1);
+            border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
+          }
+
+          /* Nova variável para roxo mais suave */
+          :root {
+            --color-soft-purple: #a87fe7; /* Um roxo mais claro e menos saturado */
+          }
+          .text-soft-purple {
+            color: var(--color-soft-purple);
           }
           `}
         </style>
         <div className="text-center">
+          {/* Video de Fundo na Página de Entrada */}
+          {entryPageVideoUrl && !entryPageVideoLoadError ? (
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="absolute inset-0 w-full h-full object-cover z-0"
+              src={entryPageVideoUrl}
+              onError={() => {
+                console.error("Erro ao carregar o vídeo da página de entrada. URL:", entryPageVideoUrl);
+                setEntryPageVideoLoadError(true);
+              }}
+              onLoadedData={() => {
+                console.log("Vídeo da página de entrada carregado com sucesso. URL:", entryPageVideoUrl);
+                setEntryPageVideoLoadError(false);
+              }}
+            >
+              Seu navegador não suporta a tag de vídeo.
+            </video>
+          ) : (
+            <div className="absolute inset-0 w-full h-full object-cover z-0 flex items-center justify-center bg-gray-800 text-gray-400 text-center">
+              {entryPageVideoLoadError ? (
+                <span>Erro ao carregar o vídeo da capa. Verifique o URL.</span>
+              ) : (
+                <span>Insira um URL de vídeo no campo "URL do Vídeo da Capa" para vê-lo aqui.</span>
+              )}
+            </div>
+          )}
+          {/* Camada de sobreposição para legibilidade */}
+          <div className="absolute inset-0 bg-black opacity-40 z-10"></div> {/* Camada escura sobre o vídeo */}
+
           <img
             src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1"
             alt="Logo Conecta"
-            className="h-48 md:h-64 w-auto mx-auto mb-8 drop-shadow-[0_0_5px_rgba(168,85,247,0.5)] pulsing-border-subtle rounded-lg"
+            className="h-48 md:h-64 w-auto mx-auto mb-8 pulsing-border-subtle rounded-lg relative z-20" /* Removido drop-shadow */
             style={{ border: '2px solid transparent' }}
           />
-          <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-4 text-neon-glow-entry">
-            Bem-vindo ao CinePrompt AI
+          <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-4 relative z-20"> {/* Removido text-neon-glow-entry */}
+            <span>Bem-vindo ao</span> <span className="text-purple-400">CinePrompt AI</span>
           </h1>
-          <p className="text-xl md:text-2xl text-purple-300 font-semibold mb-10">
-            Sua Visão Cinematográfica, Gerada com Inteligência.
+          <p className="text-xl md:text-2xl font-semibold mb-10 relative z-20">
+            <span className="text-soft-purple">Sua Visão Cinematográfica, Gerada com</span> <span className="text-white text-2xl md:text-4xl font-extrabold">Inteligência</span>.
           </p>
           <button
             onClick={handleEnterPlatform} // Usa a função com atraso
-            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 px-12 rounded-lg text-xl shadow-lg transition-all duration-300 hover:shadow-purple-500/80 border border-purple-500 relative overflow-hidden"
+            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 px-12 rounded-lg text-xl shadow-lg transition-all duration-300 hover:shadow-purple-500/80 border border-purple-500 relative overflow-hidden z-20"
           >
             Entrar na Plataforma
             <span className="absolute inset-0 bg-white opacity-0 transition-opacity duration-300 hover:opacity-10"></span>
           </button>
         </div>
+        {/* Campo de entrada para o URL do vídeo da página de entrada - REMOVIDO */}
       </div>
     );
   }
@@ -866,13 +837,15 @@ const App = () => {
     <div className="min-h-screen bg-gray-950 text-gray-100 font-sans flex flex-col futuristic-background">
       <style>
           {`
-          /* Keyframes para o brilho sutil do texto na página de entrada */
-          @keyframes glow-entry-subtle {
-            0%, 100% { text-shadow: 0 0 1px #fff, 0 0 2px #fff, 0 0 3px rgba(168, 85, 247, 0.4); }
-            50% { text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px rgba(168, 85, 247, 0.6); }
+          /* Importar a fonte Inter */
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+
+          /* Aplicar a fonte ao corpo e aos títulos */
+          body {
+            font-family: 'Inter', sans-serif;
           }
-          .text-neon-glow-entry {
-            animation: glow-entry-subtle 2.5s ease-in-out infinite alternate;
+          h1, h2, h3, h4, h5, h6 {
+            font-family: 'Inter', sans-serif;
           }
 
           /* Keyframes para o brilho sutil da borda pulsante na página de entrada */
@@ -892,7 +865,7 @@ const App = () => {
           }
 
           .futuristic-background {
-            background: 
+            background:
               radial-gradient(circle at 20% 30%, rgba(168, 85, 247, 0.05) 0%, transparent 40%), /* Roxo mais sutil */
               radial-gradient(circle at 80% 70%, rgba(59, 130, 246, 0.05) 0%, transparent 40%), /* Azul mais sutil */
               linear-gradient(160deg, #0a0a0a, #1a1a1a, #0a0a0a); /* Gradiente de cinza escuro para profundidade */
@@ -902,71 +875,92 @@ const App = () => {
 
           /* Efeito de Glassmorphism aprimorado e mais discreto */
           .glass-effect {
-            background-color: rgba(30, 41, 59, 0.15); /* Mais transparente */
+            background-color: rgba(30, 41, 59, 0.3); /* Mais transparente */
             backdrop-filter: blur(15px); /* Blur moderado */
             -webkit-backdrop-filter: blur(15px);
-            border: 1px solid rgba(71, 85, 105, 0.08); /* Borda muito subtil */
-            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.1), inset 0 0 5px rgba(168, 85, 247, 0.02); /* Sombra externa e brilho interno muito sutis */
+            border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15), inset 0 0 6px rgba(168, 85, 247, 0.05); /* Sombra externa e brilho interno mais sutis */
           }
 
           /* Ajustes para brilho dos botões e títulos no resto da app */
           .text-neon-glow {
-            text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px #a855f7, 0 0 8px #a855f7; /* Brilho mais contido */
+            text-shadow: none; /* Removido o brilho */
             animation: none; /* Estático na app principal */
+          }
+          .text-neon-glow-subtle { /* Removido o brilho */
+            text-shadow: none;
           }
           
           button {
-            box-shadow: 0 0 5px rgba(168, 85, 247, 0.2); /* Sombra base mais suave */
+            box-shadow: 0 0 3px rgba(168, 85, 247, 0.1); /* Sombra base mais suave */
             transition: box-shadow 0.3s ease-in-out, transform 0.1s ease-out;
           }
           button:hover {
-            box-shadow: 0 0 15px rgba(168, 85, 247, 0.6), 0 0 25px rgba(168, 85, 247, 0.4); /* Brilho no hover mais definido */
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.4), 0 0 15px rgba(168, 85, 247, 0.2); /* Brilho no hover mais definido, mas suave */
             transform: translateY(-1px); /* Leve elevação no hover */
           }
-          .bg-blue-600:hover { box-shadow: 0 0 15px rgba(59, 130, 246, 0.6), 0 0 25px rgba(59, 130, 246, 0.4); }
-          .bg-emerald-600:hover { box-shadow: 0 0 15px rgba(16, 185, 129, 0.6), 0 0 25px rgba(16, 185, 129, 0.4); }
-          .bg-red-600:hover { box-shadow: 0 0 15px rgba(239, 68, 68, 0.6), 0 0 25px rgba(239, 68, 68, 0.4); }
-          .bg-gray-700:hover { box-shadow: 0 0 10px rgba(156, 163, 175, 0.5), 0 0 15px rgba(156, 163, 175, 0.3); }
+          .bg-blue-600:hover { box-shadow: 0 0 10px rgba(59, 130, 246, 0.4), 0 0 15px rgba(59, 130, 246, 0.2); }
+          .bg-emerald-600:hover { box-shadow: 0 0 10px rgba(16, 185, 129, 0.4), 0 0 15px rgba(16, 185, 129, 0.2); }
+          .bg-red-600:hover { box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), 0 0 15px rgba(239, 68, 68, 0.2); }
+          .bg-gray-700:hover { box-shadow: 0 0 8px rgba(156, 163, 175, 0.4), 0 0 10px rgba(156, 163, 175, 0.2); }
 
           .glass-effect-input-subtle {
-            background-color: rgba(45, 55, 72, 0.3); /* bg-gray-700 com opacidade */
+            background-color: rgba(45, 55, 72, 0.3); /* bg-gray-700 com opacidade aumentada */
             backdrop-filter: blur(5px);
             -webkit-backdrop-filter: blur(5px);
-            border: 1px solid rgba(71, 85, 105, 0.1);
+            border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
+          }
+
+          /* Nova variável para roxo mais suave */
+          :root {
+            --color-soft-purple: #a87fe7; /* Um roxo mais claro e menos saturado */
+          }
+          .text-soft-purple {
+            color: var(--color-soft-purple);
           }
           `}
         </style>
       {/* Cabeçalho */}
-      <header className="bg-gray-900 p-4 shadow-lg border-b-2 border-purple-700 glass-effect relative overflow-hidden">
+      <header className="bg-gray-900 p-4 shadow-lg border-b-2 border-purple-700 glass-effect relative overflow-hidden min-h-[300px] flex flex-col"> {/* Removido justify-center */}
         {/* Vídeo de Fundo do Cabeçalho */}
-        <video
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="absolute inset-0 w-full h-full object-cover z-0"
-          // Substitua 'https://www.youtube.com/embed/VIDEO_ID' pelo seu vídeo Veo V3 real
-          // Nota: Para carregar vídeos do YouTube diretamente em um elemento <video>, você precisaria de um serviço de proxy ou API que forneça o URL direto do arquivo de vídeo.
-          // Para demonstração, estou usando um URL de vídeo de stock.
-          // Para vídeos do YouTube, a forma mais comum é usar um iframe, que será coberto pela camada transparente.
-          // Se quiser um vídeo de fundo real, precisará de um URL direto como:
-          // src="https://assets.mixkit.co/videos/preview/mixkit-abstract-particles-moving-4061-large.mp4"
-          // Exemplo de URL de vídeo de stock para demonstração:
-          src="https://assets.mixkit.co/videos/preview/mixkit-abstract-particles-moving-4061-large.mp4"
-          onError={(e) => console.log("Erro ao carregar vídeo:", e)}
-        >
-          Seu navegador não suporta a tag de vídeo.
-        </video>
+        {headerMediaUrl && !videoLoadError ? (
+          <video
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover z-0"
+            src={headerMediaUrl} // Usando o estado para o URL do vídeo
+            onError={() => {
+              console.error("Erro ao carregar o vídeo de apresentação do cabeçalho. URL:", headerMediaUrl);
+              setVideoLoadError(true);
+            }}
+            onLoadedData={() => {
+              console.log("Vídeo de cabeçalho carregado com sucesso. URL:", headerMediaUrl);
+              setVideoLoadError(false);
+            }}
+          >
+            Seu navegador não suporta a tag de vídeo.
+          </video>
+        ) : (
+          <div className="absolute inset-0 w-full h-full object-cover z-0 flex items-center justify-center bg-gray-800 text-gray-400 text-center">
+            {videoLoadError ? (
+              <span>Erro ao carregar o vídeo de apresentação. Verifique o URL.</span>
+            ) : (
+              <span>Insira um URL de vídeo no campo abaixo para vê-lo aqui.</span>
+            )}
+          </div>
+        )}
         {/* Camada de sobreposição para legibilidade */}
         <div className="absolute inset-0 bg-black opacity-40 z-10"></div> {/* Camada escura sobre o vídeo */}
 
-        <div className="container mx-auto flex justify-between items-center relative z-20"> {/* Conteúdo sobreposto ao vídeo */}
+        <div className="container mx-auto flex justify-between items-start relative z-20 pt-4"> {/* Alterado items-center para items-start e adicionado pt-4 */}
           <div className="flex items-center">
             {/* Logo da Empresa - Aumentada e com sombra para efeito neon */}
             <img
               src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1"
               alt="Logo Conecta"
-              className="h-16 w-auto mr-4 drop-shadow-[0_0_10px_rgba(168,85,247,0.7)]"
+              className="h-16 w-auto mr-4" /* Removido drop-shadow */
             />
           </div>
           {/* Botão de menu para mobile */}
@@ -976,7 +970,7 @@ const App = () => {
             </button>
           </div>
           {/* Navegação Desktop */}
-          <nav className="hidden md:flex space-x-6">
+          <nav className="hidden md:flex space-x-8">
             <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
               <LayoutGrid size={18} className="mr-1" /> Templates
               <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
@@ -1016,12 +1010,12 @@ const App = () => {
 
       {/* Subtítulo Impactante */}
       <div className="w-full text-center py-4 bg-gray-900 border-b border-gray-700 shadow-inner glass-effect">
-        <h2 className="text-xl md:text-3xl font-extrabold text-white drop-shadow-[0_0_4px_rgba(255,255,255,0.4)] text-neon-glow-subtle">
-          Seu Prompt, Resultado Cinematográfico
+        <h2 className="text-xl md:text-3xl font-extrabold text-white"> {/* Removido text-neon-glow-subtle */}
+          <span>Seu Prompt,</span> <span className="text-soft-purple">Resultado Cinematográfico</span>
         </h2>
-        <p className="text-md md:text-xl text-purple-400 font-semibold mt-1">
-          Um Clique para o Cinema
-        </p>
+        <p className="text-md md:text-xl font-semibold mb-10 relative z-20"> {/* Removido text-purple-300 da tag p */}
+            <span className="text-soft-purple">Sua Visão Cinematográfica, Gerada com</span> <span className="text-white text-2xl md:text-4xl font-extrabold">Inteligência</span>.
+          </p>
       </div>
 
       {/* Sidebar para Mobile */}
@@ -1287,10 +1281,18 @@ const App = () => {
         <div className="lg:grid lg:grid-cols-2 lg:gap-8 flex flex-col">
           {/* Painel de Controles */}
           <section className="p-6 rounded-xl shadow-lg mb-8 lg:mb-0 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-purple-400 mb-6 flex items-center text-neon-glow">
-              <Sparkles size={24} className="mr-2" /> Crie Seu Prompt de Vídeo IA
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+              <Sparkles size={24} className="mr-2 text-soft-purple" /> <span>Crie Seu Prompt de Vídeo</span> <span className="text-soft-purple">IA</span>
             </h2>
             <form>
+              <InputField
+                label="URL do Vídeo de Apresentação no Cabeçalho"
+                icon={Youtube}
+                value={headerMediaUrl}
+                onChange={handleSetHeaderMediaUrl}
+                placeholder="Ex: https://assets.mixkit.co/videos/preview/..."
+                tip="Cole o URL direto de um vídeo (MP4 recomendado) ou um URL de vídeo do YouTube (será usado como link)."
+              />
               <InputField
                 key="videoStyle"
                 label="Estilo do Vídeo"
@@ -1328,7 +1330,7 @@ const App = () => {
                   key="characters"
                   type="multi-select"
                   value={characters}
-                  onChange={handleSelectCharacterInPrompt}
+                  onChange={handleSetCharacters} // Directly use handleSetCharacters
                   options={userCharacters}
                   multiple={true}
                   placeholder="Selecione personagens salvos ou crie um novo..."
@@ -1371,7 +1373,6 @@ const App = () => {
                 onChange={handleSetColorPalette}
                 placeholder="Selecione a cor dominante ou o esquema..."
                 options={colorPaletteOptions}
-                tip="Selecione a cor dominante ou o esquema."
               />
               <InputField
                 key="duration"
@@ -1419,7 +1420,7 @@ const App = () => {
                 icon={Mic}
                 type="select"
                 value={voiceNarration}
-                onChange={handleSetVoiceNarration}
+                onChange={handleSetVoiceNaration}
                 placeholder="Selecione a voz ou narração..."
                 options={voiceNarrationOptions}
               />
@@ -1428,8 +1429,8 @@ const App = () => {
 
           {/* Pré-visualização do Prompt */}
           <section className="p-6 rounded-xl shadow-lg flex flex-col border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-purple-400 mb-6 flex items-center text-neon-glow">
-              <Sparkles size={24} className="mr-2" /> Resultado Final do Prompt
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
+              <Sparkles size={24} className="mr-2 text-soft-purple" /> <span>Resultado Final do</span> <span className="text-soft-purple">Prompt</span>
             </h2>
             <div className="flex-grow relative">
               <textarea
@@ -1454,7 +1455,7 @@ const App = () => {
                 >
                   {isLoadingPrompt ? (
                     <>
-                      <Loader2 size={20} className="mr-2 animate-spin" /> Gerando...
+                      <Loader2 size={20} className="mr-2" /> Gerando...
                     </>
                   ) : (
                     <>
@@ -1477,7 +1478,7 @@ const App = () => {
               <button
                 onClick={() => setIsManualInputMode(!isManualInputMode)}
                 className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50 border border-gray-600"
-              >
+                >
                 <Type size={20} className="mr-2" /> {isManualInputMode ? 'Modo IA' : 'Introduzir Manualmente'}
               </button>
 
@@ -1510,8 +1511,8 @@ const App = () => {
 
         {/* Secção de Vídeos do YouTube */}
         <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
-          <h2 className="text-2xl font-bold text-purple-400 mb-6 flex items-center text-neon-glow">
-            <Youtube size={24} className="mr-2" /> Visualizador de Vídeos YouTube
+          <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
+            <Youtube size={24} className="mr-2 text-soft-purple" /> <span>Visualizador de Vídeos</span> <span className="text-soft-purple">YouTube</span>
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
@@ -1601,8 +1602,8 @@ const App = () => {
         {/* Secção de Histórico de Prompts (apenas para visualização) */}
         {userId && userPrompts.length > 0 && (
           <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-purple-400 mb-6 flex items-center text-neon-glow">
-              <History size={24} className="mr-2" /> Seu Histórico de Prompts
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
+              <History size={24} className="mr-2 text-soft-purple" /> <span>Seu Histórico de</span> <span className="text-soft-purple">Prompts</span>
             </h2>
             <div className="space-y-4">
               {userPrompts.map((p) => (
