@@ -202,7 +202,7 @@ const App = () => {
   const [showCopiedMessage, setShowCopiedMessage] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [outputLanguage, setOutputLanguage] = useState('portuguese');
-  const [voiceNarration, setVoiceNarration] = useState(''); // Corrected spelling
+  const [voiceNarration, setVoiceNaration] = useState(''); // Corrected spelling
   const [isManualInputMode, setIsManualInputMode] = useState(false);
   const [youtubeVideoId1, setYoutubeVideoId1] = useState('');
   const [youtubeVideoId2, setYoutubeVideoId2] = useState('');
@@ -370,7 +370,7 @@ const App = () => {
   const handleSetFormat = useCallback((value) => setFormat(value), []);
   const handleSetQuality = useCallback((value) => setQuality(value), []);
   const handleSetOutputLanguage = useCallback((value) => setOutputLanguage(value), []);
-  const handleSetVoiceNarration = useCallback((value) => setVoiceNarration(value), []); // Corrected spelling
+  const handleSetVoiceNaration = useCallback((value) => setVoiceNaration(value), []); // Corrected spelling
   const handleSetAuthEmail = useCallback((value) => setAuthEmail(value), []);
   const handleSetAuthPassword = useCallback((value) => setAuthPassword(value), []);
   const handleSetUserCPF = useCallback((value) => setUserCPF(value), []);
@@ -561,7 +561,7 @@ const App = () => {
       await addDoc(promptsCollectionRef, {
         prompt: generatedPrompt,
         createdAt: new Date(),
-        videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, outputLanguage, voiceNarration
+        videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration
       });
       showFeedback('success', "Prompt guardado com sucesso!");
     } catch (error) {
@@ -583,7 +583,7 @@ const App = () => {
     setQuality('');
     setGeneratedPrompt('');
     setOutputLanguage('portuguese');
-    setVoiceNarration('');
+    setVoiceNaration('');
     showFeedback('', '');
   }, [showFeedback]);
 
@@ -801,8 +801,8 @@ const App = () => {
   }, [userId, showFeedback]);
 
   const handleAddChapter = useCallback(async () => {
-    if (!userId || !selectedStory || !newChapterNarrative.trim()) {
-      showFeedback('error', "Selecione uma série e forneça a narrativa do capítulo.");
+    if (!userId || !selectedStory) {
+      showFeedback('error', "Selecione uma série para adicionar um capítulo.");
       return;
     }
 
@@ -817,35 +817,72 @@ const App = () => {
       return;
     }
 
-    const chapterPrompt = `Crie o prompt de vídeo para o capítulo ${selectedStory.chapters.length + 1} da série "${selectedStory.title}".
-      Personagem Principal: ${character.name} (${character.description}, ${character.visualTraits}, ${character.personalityTraits}).
-      Narrativa do Capítulo: ${newChapterNarrative}.
-      Estilo da Série: ${selectedStory.videoStyle || 'Cinematográfico'}.
-      Paleta de Cores da Série: ${selectedStory.colorPalette || 'Padrão'}.
-      Voz para Narração (se aplicável): ${selectedStory.voiceNarration || 'Padrão'}.
-      O prompt deve ser detalhado para IA de vídeo.`;
+    let currentChapterNarrative = newChapterNarrative.trim();
+    let aiGeneratedNarrative = '';
+
+    // If user didn't provide narrative, ask AI to generate it
+    if (!currentChapterNarrative) {
+      const previousChapter = selectedStory.chapters?.[selectedStory.chapters.length - 1];
+      let narrativePrompt = `Gere uma narrativa detalhada e criativa para o próximo capítulo da série "${selectedStory.title}".`;
+      narrativePrompt += ` O personagem principal é ${character.name} (${character.description}, ${character.visualTraits}, ${character.personalityTraits}).`;
+      if (selectedStory.description) {
+        narrativePrompt += ` A série é sobre: ${selectedStory.description}.`;
+      }
+      if (previousChapter && previousChapter.narrative) {
+        narrativePrompt += ` O capítulo anterior terminou com: "${previousChapter.narrative}". Continue a história a partir daí.`;
+      }
+      narrativePrompt += ` A narrativa deve ser envolvente, detalhada e pronta para ser usada como base para um prompt de vídeo.`;
+
+      try {
+        const chatHistory = [{ role: "user", parts: [{ text: narrativePrompt }] }];
+        const payload = { contents: chatHistory };
+        const apiKey = "";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=`;
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        aiGeneratedNarrative = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        currentChapterNarrative = aiGeneratedNarrative; // Use AI-generated narrative
+        setNewChapterNarrative(aiGeneratedNarrative); // Update the input field with AI's narrative
+      } catch (error) {
+        console.error("Erro ao gerar narrativa do capítulo com IA:", error);
+        showFeedback('error', 'Erro ao gerar narrativa do capítulo. Tente novamente.');
+        setIsGeneratingChapterContent(false);
+        return;
+      }
+    }
+
+    if (!currentChapterNarrative) {
+      showFeedback('error', "Não foi possível gerar a narrativa do capítulo. Por favor, tente novamente ou forneça uma manualmente.");
+      setIsGeneratingChapterContent(false);
+      return;
+    }
+
+    // Now, generate the video prompt and audio based on currentChapterNarrative
+    const videoPromptText = `Com base na seguinte narrativa do capítulo: "${currentChapterNarrative}", e considerando o personagem principal ${character.name} (${character.visualTraits}, ${character.personalityTraits}), gere um prompt de vídeo cinematográfico e detalhado para IA. Inclua estilo de vídeo (${selectedStory.videoStyle || 'Cinematográfico'}), iluminação (${selectedStory.lighting || 'Padrão'}), paleta de cores (${selectedStory.colorPalette || 'Padrão'}) e movimentos de câmera (${selectedStory.cameraType || 'Padrão'}).`;
 
     try {
-      // Generate Prompt for Chapter
-      let chatHistory = [{ role: "user", parts: [{ text: chapterPrompt }] }];
-      const promptPayload = { contents: chatHistory };
-      const apiKey = "";
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+      let chatHistoryVideo = [{ role: "user", parts: [{ text: videoPromptText }] }];
+      const videoPromptPayload = { contents: chatHistoryVideo };
+      const videoPromptApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=`;
 
-      const promptResponse = await fetch(apiUrl, {
+      const videoPromptResponse = await fetch(videoPromptApiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(promptPayload)
+        body: JSON.stringify(videoPromptPayload)
       });
-      const promptResult = await promptResponse.json();
-      const generatedText = promptResult.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      setGeneratedPrompt(generatedText);
+      const videoPromptResult = await videoPromptResponse.json();
+      const generatedVideoPrompt = videoPromptResult.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      setGeneratedPrompt(generatedVideoPrompt);
 
-      // Generate Audio for Chapter Narrative (if voice selected)
       let audioUrl = '';
-      if (selectedStory.voiceNarration && generatedText) {
+      if (selectedStory.voiceNarration && currentChapterNarrative) {
         const ttsPayload = {
-          contents: [{ parts: [{ text: generatedText }] }],
+          contents: [{ parts: [{ text: currentChapterNarrative }] }], // Use the generated narrative for TTS
           generationConfig: {
             responseModalities: ["AUDIO"],
             speechConfig: {
@@ -856,7 +893,7 @@ const App = () => {
           },
           model: "gemini-2.5-flash-preview-tts"
         };
-        const ttsApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=`; // API Key will be injected
+        const ttsApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=`;
 
         const ttsResponse = await fetch(ttsApiUrl, {
           method: 'POST',
@@ -869,12 +906,10 @@ const App = () => {
         if (audioPart && audioPart.inlineData && audioPart.inlineData.data) {
           const audioData = audioPart.inlineData.data;
           const mimeType = audioPart.inlineData.mimeType;
-          // Convert base64 PCM to WAV Blob
           const sampleRateMatch = mimeType.match(/rate=(\d+)/);
-          const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 16000; // Default to 16000 if not found
+          const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 16000;
           const pcmData = Uint8Array.from(atob(audioData), c => c.charCodeAt(0));
           const pcm16 = new Int16Array(pcmData.buffer);
-
           const wavBlob = pcmToWav(pcm16, sampleRate);
           audioUrl = URL.createObjectURL(wavBlob);
         } else {
@@ -883,12 +918,11 @@ const App = () => {
         }
       }
 
-      // Save Chapter to Firestore
       const chaptersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories/${selectedStory.id}/chapters`);
       await addDoc(chaptersCollectionRef, {
         chapterNumber: (selectedStory.chapters?.length || 0) + 1,
-        narrative: newChapterNarrative,
-        generatedPrompt: generatedText,
+        narrative: currentChapterNarrative,
+        generatedPrompt: generatedVideoPrompt,
         generatedAudioUrl: audioUrl,
         createdAt: new Date()
       });
@@ -985,7 +1019,7 @@ const App = () => {
             background: #0a0a0a; /* Fundo preto puro */
             background-image: radial-gradient(circle at center, rgba(168, 85, 247, 0.08), rgba(59, 130, 246, 0.05), transparent 70%); /* Gradiente radial sutil */
             background-size: 100% 100%;
-            animation: none; /* Sem animação de fundo */
+            animation: futuristic-background-animation 50s ease infinite alternate; /* Animação mais lenta e suave */
             position: relative;
             overflow: hidden;
           }
@@ -1038,7 +1072,7 @@ const App = () => {
           `}
         </style>
         <div className="text-center">
-          {/* Video de Fundo na Página de Entrada */}
+          {/* Vídeo de Fundo na Página de Entrada */}
           {entryPageVideoUrl && !entryPageVideoLoadError ? (
             <video
               autoPlay
@@ -1068,7 +1102,7 @@ const App = () => {
             </div>
           )}
           {/* Camada de sobreposição para legibilidade */}
-          <div className="absolute inset-0 bg-black opacity-40 z-10"></div> {/* Camada escura sobre o vídeo */}
+          <div className="absolute inset-0 bg-black opacity-40 z-10"></div>
 
           <img
             src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1"
@@ -1080,7 +1114,7 @@ const App = () => {
             <span>Bem-vindo ao</span> <span className="text-purple-400">CinePrompt AI</span>
           </h1>
           <p className="text-xl md:text-2xl font-semibold mb-10 relative z-20">
-            <span className="text-soft-purple">Sua Visão Cinematográfica, Gerada com</span> <span className="text-white text-2xl md:text-4xl font-extrabold">Inteligência</span>.
+            <span className="text-soft-purple">Sua Visão Grandiosa, Gerada com</span> <span className="text-white text-2xl md:text-4xl font-extrabold">Inteligência</span>. {/* Alterado "Cinematográfica" para "Grandiosa" */}
           </p>
           <button
             onClick={handleEnterPlatform} // Usa a função com atraso
@@ -1272,10 +1306,10 @@ const App = () => {
       {/* Subtítulo Impactante */}
       <div className="w-full text-center py-4 bg-gray-900 border-b border-gray-700 shadow-inner glass-effect">
         <h2 className="text-xl md:text-3xl font-extrabold text-white">
-          <span>Seu Prompt,</span> <span className="text-soft-purple">Resultado Cinematográfico</span>
+          <span>Seu Prompt,</span> <span className="text-soft-purple">Obra Cinematográfica</span> {/* Alterado "Resultado" para "Obra" */}
         </h2>
         <p className="text-md md:text-xl font-semibold mb-10 relative z-20">
-            <span className="text-soft-purple">Sua Visão Cinematográfica, Gerada com</span> <span className="text-white text-2xl md:text-4xl font-extrabold">Inteligência</span>.
+            <span className="text-soft-purple">Sua Visão Grandiosa, Gerada com</span> <span className="text-white text-2xl md:text-4xl font-extrabold">Inteligência</span>. {/* Alterado "Cinematográfica" para "Grandiosa" */}
           </p>
       </div>
 
@@ -1644,7 +1678,7 @@ const App = () => {
                     type="textarea"
                     value={newChapterNarrative}
                     onChange={setNewChapterNarrative}
-                    placeholder="Descreva a narrativa deste capítulo. Ex: O herói encontra um novo aliado..."
+                    placeholder="Descreva a narrativa deste capítulo. Deixe em branco para que a IA crie a narrativa completa."
                   />
                   <button
                     onClick={handleAddChapter}
@@ -1786,7 +1820,7 @@ const App = () => {
         <div className="lg:grid lg:grid-cols-2 lg:gap-8 flex flex-col">
           {/* Painel de Controles */}
           <section className="p-6 rounded-xl shadow-lg mb-8 lg:mb-0 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
               <Sparkles size={24} className="mr-2 text-soft-purple" /> <span>Crie Seu Prompt de Vídeo</span> <span className="text-soft-purple">IA</span>
             </h2>
             <form>
@@ -1933,7 +1967,7 @@ const App = () => {
                 icon={Mic}
                 type="select"
                 value={voiceNarration}
-                onChange={handleSetVoiceNarration}
+                onChange={handleSetVoiceNaration}
                 placeholder="Selecione a voz ou narração..."
                 options={voiceNarrationOptions}
               />
@@ -1942,7 +1976,7 @@ const App = () => {
 
           {/* Pré-visualização do Prompt */}
           <section className="p-6 rounded-xl shadow-lg flex flex-col border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
               <Sparkles size={24} className="mr-2 text-soft-purple" /> <span>Resultado Final do</span> <span className="text-soft-purple">Prompt</span>
             </h2>
             <div className="flex-grow relative">
@@ -2024,7 +2058,7 @@ const App = () => {
 
         {/* Secção de Vídeos do YouTube */}
         <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
               <Youtube size={24} className="mr-2 text-soft-purple" /> <span>Visualizador de Vídeos</span> <span className="text-soft-purple">YouTube</span>
             </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2115,12 +2149,12 @@ const App = () => {
         {/* Secção de Histórico de Prompts (apenas para visualização) */}
         {userId && userPrompts.length > 0 && (
           <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
               <History size={24} className="mr-2 text-soft-purple" /> <span>Seu Histórico de</span> <span className="text-soft-purple">Prompts</span>
             </h2>
             <div className="space-y-4">
               {userPrompts.map((p) => (
-                <div key={p.id} className="bg-gray-700 p-4 rounded-lg shadow-md border border-gray-600 hover:border-blue-500 transition-colors duration-300">
+                <div key={p.id} className="bg-gray-700 p-4 rounded-lg shadow-md flex justify-between items-center border border-gray-600 hover:border-blue-500 transition-colors duration-300">
                   <p className="font-mono text-sm text-gray-200 break-words">{p.prompt}</p>
                   <p className="text-xs text-gray-400 mt-2">
                     Criado em: {new Date(p.createdAt.toDate()).toLocaleString()}
