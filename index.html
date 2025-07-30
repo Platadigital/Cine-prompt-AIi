@@ -202,7 +202,7 @@ const App = () => {
   const [showCopiedMessage, setShowCopiedMessage] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [outputLanguage, setOutputLanguage] = useState('portuguese');
-  const [voiceNarration, setVoiceNaration] = useState('');
+  const [voiceNarration, setVoiceNarration] = useState(''); // Corrected spelling
   const [isManualInputMode, setIsManualInputMode] = useState(false);
   const [youtubeVideoId1, setYoutubeVideoId1] = useState('');
   const [youtubeVideoId2, setYoutubeVideoId2] = useState('');
@@ -370,7 +370,7 @@ const App = () => {
   const handleSetFormat = useCallback((value) => setFormat(value), []);
   const handleSetQuality = useCallback((value) => setQuality(value), []);
   const handleSetOutputLanguage = useCallback((value) => setOutputLanguage(value), []);
-  const handleSetVoiceNaration = useCallback((value) => setVoiceNaration(value), []);
+  const handleSetVoiceNarration = useCallback((value) => setVoiceNarration(value), []); // Corrected spelling
   const handleSetAuthEmail = useCallback((value) => setAuthEmail(value), []);
   const handleSetAuthPassword = useCallback((value) => setAuthPassword(value), []);
   const handleSetUserCPF = useCallback((value) => setUserCPF(value), []);
@@ -568,7 +568,7 @@ const App = () => {
       console.error("Erro ao guardar o prompt:", error);
       showFeedback('error', "Erro ao guardar o prompt. Tente novamente.");
     }
-  }, [userId, generatedPrompt, videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, outputLanguage, voiceNarration, showFeedback]);
+  }, [userId, generatedPrompt, videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration, showFeedback]);
 
   const resetForm = useCallback(() => {
     setVideoStyle('');
@@ -583,7 +583,7 @@ const App = () => {
     setQuality('');
     setGeneratedPrompt('');
     setOutputLanguage('portuguese');
-    setVoiceNaration('');
+    setVoiceNarration('');
     showFeedback('', '');
   }, [showFeedback]);
 
@@ -829,9 +829,10 @@ const App = () => {
       // Generate Prompt for Chapter
       let chatHistory = [{ role: "user", parts: [{ text: chapterPrompt }] }];
       const promptPayload = { contents: chatHistory };
-      const promptApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=`; // API Key will be injected
+      const apiKey = "";
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
-      const promptResponse = await fetch(promptApiUrl, {
+      const promptResponse = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(promptPayload)
@@ -979,19 +980,14 @@ const App = () => {
             animation: pulse-border-subtle 3.5s infinite ease-in-out;
           }
 
-          /* Keyframes para o fundo abstrato e dinâmico */
-          @keyframes futuristic-background-animation {
-            0% { background-position: 0% 0%, 50% 50%, 100% 100%; }
-            100% { background-position: 100% 100%, 0% 0%, 50% 50%; }
-          }
-
+          /* Fundo escuro futurista com gradiente radial sutil */
           .futuristic-background {
-            background:
-              radial-gradient(circle at 20% 30%, rgba(168, 85, 247, 0.05) 0%, transparent 40%), /* Roxo mais sutil */
-              radial-gradient(circle at 80% 70%, rgba(59, 130, 246, 0.05) 0%, transparent 40%), /* Azul mais sutil */
-              linear-gradient(160deg, #0a0a0a, #1a1a1a, #0a0a0a); /* Gradiente de cinza escuro para profundidade */
-            background-size: 300% 300%, 300% 300%, 100% 100%;
-            animation: futuristic-background-animation 50s ease infinite alternate; /* Animação mais lenta e suave */
+            background: #0a0a0a; /* Fundo preto puro */
+            background-image: radial-gradient(circle at center, rgba(168, 85, 247, 0.08), rgba(59, 130, 246, 0.05), transparent 70%); /* Gradiente radial sutil */
+            background-size: 100% 100%;
+            animation: none; /* Sem animação de fundo */
+            position: relative;
+            overflow: hidden;
           }
 
           /* Efeito de Glassmorphism aprimorado e mais discreto */
@@ -1000,16 +996,16 @@ const App = () => {
             backdrop-filter: blur(15px); /* Blur moderado */
             -webkit-backdrop-filter: blur(15px);
             border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15), inset 0 0 6px rgba(168, 85, 247, 0.05); /* Sombra externa e brilho interno mais sutis */
+            box-shadow: 0 0 8px rgba(168, 85, 247, 0.3), 0 0 12px rgba(168, 85, 247, 0.15); /* Sombra externa e brilho interno mais sutis */
           }
 
           /* Ajustes para brilho dos botões e títulos no resto da app */
           .text-neon-glow {
-            text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px #a855f7, 0 0 8px #a855f7; /* Brilho mais contido */
+            text-shadow: none; /* Removido o brilho */
             animation: none; /* Estático na app principal */
           }
-          .text-neon-glow-subtle { /* Reintroduzido brilho sutil */
-            text-shadow: 0 0 1px #fff, 0 0 2px rgba(168, 85, 247, 0.4), 0 0 3px rgba(168, 85, 247, 0.3);
+          .text-neon-glow-subtle { /* Removido o brilho */
+            text-shadow: none;
           }
           
           button {
@@ -1077,10 +1073,10 @@ const App = () => {
           <img
             src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1"
             alt="Logo Conecta"
-            className="h-48 md:h-64 w-auto mx-auto mb-8 pulsing-border-subtle rounded-lg relative z-20" /* Removido drop-shadow */
+            className="h-48 md:h-64 w-auto mx-auto mb-8 rounded-lg relative z-20" /* Removido pulsing-border-subtle e drop-shadow */
             style={{ border: '2px solid transparent' }}
           />
-          <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-4 relative z-20"> {/* Removido text-neon-glow-entry */}
+          <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-4 relative z-20">
             <span>Bem-vindo ao</span> <span className="text-purple-400">CinePrompt AI</span>
           </h1>
           <p className="text-xl md:text-2xl font-semibold mb-10 relative z-20">
@@ -1124,19 +1120,14 @@ const App = () => {
             animation: pulse-border-subtle 3.5s infinite ease-in-out;
           }
 
-          /* Keyframes para o fundo abstrato e dinâmico */
-          @keyframes futuristic-background-animation {
-            0% { background-position: 0% 0%, 50% 50%, 100% 100%; }
-            100% { background-position: 100% 100%, 0% 0%, 50% 50%; }
-          }
-
+          /* Fundo escuro futurista com gradiente radial sutil */
           .futuristic-background {
-            background:
-              radial-gradient(circle at 20% 30%, rgba(168, 85, 247, 0.05) 0%, transparent 40%), /* Roxo mais sutil */
-              radial-gradient(circle at 80% 70%, rgba(59, 130, 246, 0.05) 0%, transparent 40%), /* Azul mais sutil */
-              linear-gradient(160deg, #0a0a0a, #1a1a1a, #0a0a0a); /* Gradiente de cinza escuro para profundidade */
-            background-size: 300% 300%, 300% 300%, 100% 100%;
+            background: #0a0a0a; /* Fundo preto puro */
+            background-image: radial-gradient(circle at center, rgba(168, 85, 247, 0.08), rgba(59, 130, 246, 0.05), transparent 70%); /* Gradiente radial sutil */
+            background-size: 100% 100%;
             animation: futuristic-background-animation 50s ease infinite alternate; /* Animação mais lenta e suave */
+            position: relative;
+            overflow: hidden;
           }
 
           /* Efeito de Glassmorphism aprimorado e mais discreto */
@@ -1145,16 +1136,16 @@ const App = () => {
             backdrop-filter: blur(15px); /* Blur moderado */
             -webkit-backdrop-filter: blur(15px);
             border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15), inset 0 0 6px rgba(168, 85, 247, 0.05); /* Sombra externa e brilho interno mais sutis */
+            box-shadow: 0 0 8px rgba(168, 85, 247, 0.3), 0 0 12px rgba(168, 85, 247, 0.15); /* Sombra externa e brilho interno mais sutis */
           }
 
           /* Ajustes para brilho dos botões e títulos no resto da app */
           .text-neon-glow {
-            text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 6px #a855f7, 0 0 8px #a855f7; /* Brilho mais contido */
+            text-shadow: none; /* Removido o brilho */
             animation: none; /* Estático na app principal */
           }
-          .text-neon-glow-subtle { /* Reintroduzido brilho sutil */
-            text-shadow: 0 0 1px #fff, 0 0 2px rgba(168, 85, 247, 0.4), 0 0 3px rgba(168, 85, 247, 0.3);
+          .text-neon-glow-subtle { /* Removido o brilho */
+            text-shadow: none;
           }
           
           button {
@@ -1280,7 +1271,7 @@ const App = () => {
 
       {/* Subtítulo Impactante */}
       <div className="w-full text-center py-4 bg-gray-900 border-b border-gray-700 shadow-inner glass-effect">
-        <h2 className="text-xl md:text-3xl font-extrabold text-white text-neon-glow">
+        <h2 className="text-xl md:text-3xl font-extrabold text-white">
           <span>Seu Prompt,</span> <span className="text-soft-purple">Resultado Cinematográfico</span>
         </h2>
         <p className="text-md md:text-xl font-semibold mb-10 relative z-20">
@@ -1678,7 +1669,7 @@ const App = () => {
                     {selectedStory.chapters.map((chapter) => (
                       <div key={chapter.id} className="bg-gray-700 p-4 rounded-lg shadow-md flex justify-between items-center border border-gray-600 hover:border-blue-500 transition-colors duration-200 glass-effect">
                         <div>
-                          <p className="font-bold text-lg text-purple-300">Capítulo {chapter.chapterNumber}</p>
+                          <p className="font-bold text-lg text-purple-300">{chapter.chapterNumber}</p>
                           <p className="text-sm text-gray-300 mt-1">{chapter.narrative}</p>
                           {chapter.generatedPrompt && (
                             <div className="mt-2 text-gray-200 text-sm bg-gray-800 p-3 rounded-md">
@@ -1795,7 +1786,7 @@ const App = () => {
         <div className="lg:grid lg:grid-cols-2 lg:gap-8 flex flex-col">
           {/* Painel de Controles */}
           <section className="p-6 rounded-xl shadow-lg mb-8 lg:mb-0 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
               <Sparkles size={24} className="mr-2 text-soft-purple" /> <span>Crie Seu Prompt de Vídeo</span> <span className="text-soft-purple">IA</span>
             </h2>
             <form>
@@ -1942,7 +1933,7 @@ const App = () => {
                 icon={Mic}
                 type="select"
                 value={voiceNarration}
-                onChange={handleSetVoiceNaration}
+                onChange={handleSetVoiceNarration}
                 placeholder="Selecione a voz ou narração..."
                 options={voiceNarrationOptions}
               />
@@ -1951,7 +1942,7 @@ const App = () => {
 
           {/* Pré-visualização do Prompt */}
           <section className="p-6 rounded-xl shadow-lg flex flex-col border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
               <Sparkles size={24} className="mr-2 text-soft-purple" /> <span>Resultado Final do</span> <span className="text-soft-purple">Prompt</span>
             </h2>
             <div className="flex-grow relative">
@@ -2033,9 +2024,9 @@ const App = () => {
 
         {/* Secção de Vídeos do YouTube */}
         <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
-          <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
-            <Youtube size={24} className="mr-2 text-soft-purple" /> <span>Visualizador de Vídeos</span> <span className="text-soft-purple">YouTube</span>
-          </h2>
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+              <Youtube size={24} className="mr-2 text-soft-purple" /> <span>Visualizador de Vídeos</span> <span className="text-soft-purple">YouTube</span>
+            </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <InputField
@@ -2124,7 +2115,7 @@ const App = () => {
         {/* Secção de Histórico de Prompts (apenas para visualização) */}
         {userId && userPrompts.length > 0 && (
           <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
               <History size={24} className="mr-2 text-soft-purple" /> <span>Seu Histórico de</span> <span className="text-soft-purple">Prompts</span>
             </h2>
             <div className="space-y-4">
