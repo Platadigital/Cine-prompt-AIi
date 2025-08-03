@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
+import { getFunctions, httpsCallable } from 'firebase/functions'; // Importar functions
 import {
   getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, GoogleAuthProvider, signInWithPopup
@@ -8,65 +9,55 @@ import { getFirestore, collection, addDoc, query, onSnapshot, orderBy, doc, dele
 
 // Importar ícones do Lucide React
 import {
-  Film,
-  Building,
-  Edit,
-  User,
-  Camera,
-  Lightbulb,
-  Palette,
-  Clock,
-  Crop,
-  Sparkles,
-  Copy,
-  RotateCcw,
-  Save,
-  Menu,
-  X,
-  LogIn,
-  UserCircle,
-  History,
-  LayoutGrid,
-  DollarSign,
-  Loader2,
-  CheckCircle,
-  AlertCircle,
-  PlusCircle,
-  Users,
-  Trash2,
-  PenSquare,
-  Languages,
-  Mic,
-  Mail,
-  Lock,
-  CreditCard,
-  LogOut,
-  UserPlus,
-  ArrowRightCircle,
-  Type,
-  Youtube,
-  Image as ImageIcon // Renomeado para evitar conflito
+  Film, Building, Edit, User, Camera, Lightbulb, Palette, Clock, Crop, Sparkles, Copy,
+  RotateCcw, Save, Menu, X, LogIn, UserCircle, History, LayoutGrid, DollarSign,
+  Loader2, CheckCircle, AlertCircle, PlusCircle, Users, Trash2, PenSquare, Languages,
+  Mic, Mail, Lock, CreditCard, LogOut, UserPlus, ArrowRightCircle
 } from 'lucide-react';
 
-// Variáveis globais fornecidas pelo ambiente Canvas
+// --- Variáveis Globais e Configuração do Firebase ---
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? initialAuthToken : null;
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-// Inicialização do Firebase (fora do componente para evitar re-inicializações desnecessárias)
 let app;
 let db;
 let auth;
+let functions; // Variável para as Cloud Functions
 
 try {
   app = initializeApp(firebaseConfig);
   db = getFirestore(app);
   auth = getAuth(app);
+  functions = getFunctions(app); // Inicializar as Functions
 } catch (error) {
   console.error("Erro ao inicializar o Firebase:", error);
 }
 
-// --- Opções estáticas para os campos de seleção (DEFINIDAS FORA DO COMPONENTE) ---
+// --- Funções Auxiliares ---
+/**
+ * Realiza uma chamada fetch com retentativa exponencial.
+ * (Esta função pode ser útil para outras chamadas de API, por isso foi mantida)
+ */
+const fetchWithExponentialBackoff = async (url, options, retries = 5, delay = 1000) => {
+    try {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: { message: response.statusText } }));
+            throw new Error(`API Error: ${response.status} - ${errorData.error?.message}`);
+        }
+        return await response.json();
+    } catch (error) {
+        if (retries > 0) {
+            await new Promise(res => setTimeout(res, delay));
+            return fetchWithExponentialBackoff(url, options, retries - 1, delay * 2);
+        } else {
+            throw error;
+        }
+    }
+};
+
+// --- Opções Estáticas para Seleção ---
 const videoStyleOptions = [
   'Realista', 'Anime', 'Cinematográfico', 'Futurista', 'Documentário', 'Animação 2D', 'Stop Motion', 'VFX',
   'Fantasia Épica', 'Ficção Científica Clássica', 'Noir', 'Comédia Romântica', 'Terror Psicológico',
@@ -89,30 +80,96 @@ const colorPaletteOptions = [
   'Cores Neons (saturadas)', 'Tons Jóia', 'Paleta Desbotada (Vintage)', 'Cores Primárias Fortes'
 ];
 const formatOptions = ['16:9 (Paisagem)', '9:16 (Vertical/TikTok)', '1:1 (Quadrado)', '4:3 (Clássico)'];
-const outputLanguageOptions = ['portuguese', 'english'];
-const voiceNarrationOptions = ['Voz Brasileira (Português do Brasil)', 'Voz Masculina Padrão', 'Voz Feminina Padrão', 'Narrador Robótico', 'Sem Narração'];
-const ttsVoiceNames = [
+const outputLanguageOptions = [{id: 'portuguese', name: 'Português'}, {id: 'english', name: 'Inglês'}];
+const voiceNarrationOptions = [
   "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
   "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
   "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
   "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
-  "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+  "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat", "Sem Narração"
 ];
-// ---------------------------------------------------------------------------------
 
-// Componente de Input Reutilizável (definido fora do componente App)
+// --- Componentes de UI Reutilizáveis ---
+
 const InputField = React.memo(({ label, icon: Icon, type = 'text', value, onChange, placeholder, options, min, max, step, tip, multiple = false }) => {
-  const controlledValue = value === null || value === undefined ? '' : value;
+  const controlledValue = value === null || value === undefined ? (multiple ? [] : '') : value;
 
   const handleChangeEvent = useCallback((e) => {
     if (type === 'range') {
       onChange(Number(e.target.value));
-    } else if (type === 'multi-select') {
-      onChange(Array.from(e.target.selectedOptions).map(option => option.value));
+    } else if (multiple) {
+      onChange(Array.from(e.target.selectedOptions, option => option.value));
     } else {
       onChange(e.target.value);
     }
-  }, [onChange, type]);
+  }, [onChange, type, multiple]);
+
+  const renderOptions = () => {
+    if (!options) return null;
+    if (options.length === 0) {
+        return <option value="" disabled>Nenhuma opção disponível</option>;
+    }
+    return options.map((option) => {
+        const isObject = typeof option === 'object' && option !== null;
+        const optionValue = isObject ? option.id : option;
+        const optionLabel = isObject ? option.name : option;
+        return <option key={optionValue} value={optionValue}>{optionLabel}</option>;
+    });
+  };
+
+  const renderSelect = () => (
+    <select
+      value={controlledValue}
+      onChange={handleChangeEvent}
+      multiple={multiple}
+      className={`shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle ${multiple ? 'h-32 overflow-y-auto' : ''}`}
+    >
+      {placeholder && <option value="" disabled>{placeholder}</option>}
+      {renderOptions()}
+    </select>
+  );
+
+  const renderTextarea = () => (
+    <textarea
+      value={controlledValue}
+      onChange={handleChangeEvent}
+      placeholder={placeholder}
+      rows="3"
+      className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
+    />
+  );
+
+  const renderRange = () => (
+    <div className="flex items-center space-x-3">
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={controlledValue}
+        onChange={handleChangeEvent}
+        className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-purple-500"
+      />
+      <input
+        type="number"
+        value={controlledValue}
+        onChange={handleChangeEvent}
+        className="w-20 shadow appearance-none border border-gray-600 rounded-lg py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+        min={min}
+        max={max}
+      />
+    </div>
+  );
+
+  const renderInput = () => (
+    <input
+      type={type}
+      value={controlledValue}
+      onChange={handleChangeEvent}
+      placeholder={placeholder}
+      className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
+    />
+  );
 
   return (
     <div className="mb-4">
@@ -120,78 +177,54 @@ const InputField = React.memo(({ label, icon: Icon, type = 'text', value, onChan
         {Icon && <Icon size={18} className="mr-2 text-purple-400" />}
         {label}
       </label>
-      {type === 'select' ? (
-        <select
-          value={controlledValue}
-          onChange={handleChangeEvent}
-          className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
-        >
-          <option value="" disabled>{placeholder}</option>
-          {options.map((option) => (
-            <option key={option} value={option}>{option}</option>
-          ))}
-        </select>
-      ) : type === 'multi-select' ? (
-        <select
-          multiple={multiple}
-          value={controlledValue}
-          onChange={handleChangeEvent}
-          className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 h-32 overflow-y-auto glass-effect-input-subtle"
-        >
-          {options.length === 0 && <option value="" disabled>Nenhum personagem guardado. Crie um!</option>}
-          {options.map((option) => (
-            <option key={option.id} value={option.id}>{option.name}</option>
-          ))}
-        </select>
-      ) : type === 'textarea' ? (
-        <textarea
-          value={controlledValue}
-          onChange={handleChangeEvent}
-          placeholder={placeholder}
-          rows="3"
-          className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
-        />
-      ) : type === 'range' ? (
-        <div className="flex items-center space-x-3">
-          <input
-            type="range"
-            min={min}
-            max={max}
-            step={step}
-            value={controlledValue}
-            onChange={handleChangeEvent}
-            className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-purple-500"
-          />
-          <input
-            type="number"
-            value={controlledValue}
-            onChange={handleChangeEvent}
-            className="w-20 shadow appearance-none border border-gray-600 rounded-lg py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            min={min}
-            max={max}
-          />
-        </div>
-      ) : (
-        <input
-          type={type}
-          value={controlledValue}
-          onChange={handleChangeEvent}
-          placeholder={placeholder}
-          className="shadow appearance-none border border-gray-600 rounded-lg w-full py-2 px-3 bg-gray-700 text-gray-100 leading-tight focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 glass-effect-input-subtle"
-        />
-      )}
+      {type === 'select' || multiple ? renderSelect() :
+       type === 'textarea' ? renderTextarea() :
+       type === 'range' ? renderRange() :
+       renderInput()}
       {tip && <p className="text-gray-400 text-xs mt-1">{tip}</p>}
     </div>
   );
 });
 
+const ConfirmationModal = ({ isOpen, title, message, onConfirm, onCancel }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[100] p-4">
+            <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-md border border-red-700 glass-effect">
+                <h2 className="text-2xl font-bold text-red-400 flex items-center mb-4">
+                    <AlertCircle size={24} className="mr-2" /> {title}
+                </h2>
+                <p className="text-gray-300 mb-6">{message}</p>
+                <div className="flex justify-end space-x-4">
+                    <button
+                        onClick={onCancel}
+                        className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-2 px-4 rounded-lg shadow-lg transition-all"
+                    >
+                        Cancelar
+                    </button>
+                    <button
+                        onClick={onConfirm}
+                        className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-all"
+                    >
+                        Confirmar
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- Componente Principal ---
+// Para um projeto maior, este componente gigante deveria ser dividido em vários menores.
+// Ex: Header.js, PromptForm.js, CharacterManagerModal.js, etc.
 
 const App = () => {
+  // --- Estados da Aplicação ---
   const [showEntryPage, setShowEntryPage] = useState(true);
   const [videoStyle, setVideoStyle] = useState('');
   const [theme, setTheme] = useState('');
   const [narrative, setNarrative] = useState('');
-  const [characters, setCharacters] = useState([]);
+  const [selectedCharacters, setSelectedCharacters] = useState([]);
   const [cameraType, setCameraType] = useState('');
   const [lighting, setLighting] = useState('');
   const [colorPalette, setColorPalette] = useState('');
@@ -199,260 +232,182 @@ const App = () => {
   const [format, setFormat] = useState('');
   const [quality, setQuality] = useState('');
   const [generatedPrompt, setGeneratedPrompt] = useState('');
-  const [showCopiedMessage, setShowCopiedMessage] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [outputLanguage, setOutputLanguage] = useState('portuguese');
-  const [voiceNarration, setVoiceNaration] = useState(''); // Corrected spelling
+  const [voiceNarration, setVoiceNarration] = useState('');
   const [isManualInputMode, setIsManualInputMode] = useState(false);
-  const [youtubeVideoId1, setYoutubeVideoId1] = useState('');
-  const [youtubeVideoId2, setYoutubeVideoId2] = useState('');
-  const [youtubeVideoId3, setYoutubeVideoId3] = useState('');
-  const [youtubeVideoId4, setYoutubeVideoId4] = useState('');
-  const [headerMediaUrl, setHeaderMediaUrl] = useState('https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2FUntitled%20design.mp4?alt=media&token=623eef00-b722-4a64-8e27-b2bf831d5ebc');
-  const [videoLoadError, setVideoLoadError] = useState(false);
-  const [entryPageVideoUrl, setEntryPageVideoUrl] = useState('https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2FVIDEO%20CAPA%20NEO%20CINE%20PROMP.mp4?alt=media&token=a5037c56-def0-447d-8b22-5d18e7ec3e76');
-  const [entryPageVideoLoadError, setEntryPageVideoLoadError] = useState(false);
+ 
+  // Estados de UI e Modais
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState({ type: '', text: '' });
+  const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
+  const [isCharacterManagerOpen, setIsCharacterManagerOpen] = useState(false);
+  const [isStoryManagerOpen, setIsStoryManagerOpen] = useState(false);
+  const [isCameraTypeManagerOpen, setIsCameraTypeManagerOpen] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showPlansModal, setShowPlansModal] = useState(false);
+  const [confirmationModal, setConfirmationModal] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
 
+  // Estados de Autenticação e Dados do Usuário
   const [userId, setUserId] = useState(null);
   const [userEmail, setUserEmail] = useState('');
   const [userCPF, setUserCPF] = useState('');
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [userPrompts, setUserPrompts] = useState([]);
   const [userCharacters, setUserCharacters] = useState([]);
+  const [userStories, setUserStories] = useState([]);
+  const [userCustomCameraTypes, setUserCustomCameraTypes] = useState([]);
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
 
-  const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
-  const [feedbackMessage, setFeedbackMessage] = useState({ type: '', text: '' });
-
-  const [isCharacterManagerOpen, setIsCharacterManagerOpen] = useState(false);
+  // Estados de Gerenciamento de Personagens
   const [newCharacterName, setNewCharacterName] = useState('');
   const [newCharacterDescription, setNewCharacterDescription] = useState('');
   const [newCharacterVisuals, setNewCharacterVisuals] = useState('');
   const [newCharacterPersonality, setNewCharacterPersonality] = useState('');
   const [editingCharacter, setEditingCharacter] = useState(null);
 
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [isRegisterMode, setIsRegisterMode] = useState(false);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [showProfileModal, setShowProfileModal] = useState(false);
-  const [showPlansModal, setShowPlansModal] = useState(false);
-
-  // New states for Story/Series Management
-  const [isStoryManagerOpen, setIsStoryManagerOpen] = useState(false);
-  const [userStories, setUserStories] = useState([]);
-  const [selectedStory, setSelectedStory] = useState(null); // The current story being viewed/edited
+  // Estados de Gerenciamento de Séries/Histórias
+  const [selectedStory, setSelectedStory] = useState(null);
   const [newStoryTitle, setNewStoryTitle] = useState('');
   const [newStoryDescription, setNewStoryDescription] = useState('');
-  const [newStoryCharacterId, setNewStoryCharacterId] = useState(''); // Character ID for the story
+  const [newStoryCharacterId, setNewStoryCharacterId] = useState('');
   const [newChapterNarrative, setNewChapterNarrative] = useState('');
-  const [generatedChapterAudioUrl, setGeneratedChapterAudioUrl] = useState('');
   const [isGeneratingChapterContent, setIsGeneratingChapterContent] = useState(false);
 
-  // New states for Custom Camera Type Management
-  const [isCameraTypeManagerOpen, setIsCameraTypeManagerOpen] = useState(false);
-  const [userCustomCameraTypes, setUserCustomCameraTypes] = useState([]);
+  // Estados de Gerenciamento de Tipos de Câmera
   const [newCameraTypeName, setNewCameraTypeName] = useState('');
   const [editingCameraType, setEditingCameraType] = useState(null);
 
+  // Estados de Mídia
+  const [headerMediaUrl, setHeaderMediaUrl] = useState('https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2FUntitled%20design.mp4?alt=media&token=623eef00-b722-4a64-8e27-b2bf831d5ebc');
+  const [videoLoadError, setVideoLoadError] = useState(false);
+  const [entryPageVideoUrl, setEntryPageVideoUrl] = useState('https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2FVIDEO%20CAPA%20NEO%20CINE%20PROMP.mp4?alt=media&token=a5037c56-def0-447d-8b22-5d18e7ec3e76');
+  const [entryPageVideoLoadError, setEntryPageVideoLoadError] = useState(false);
+
+  // --- Callbacks e Funções ---
 
   const showFeedback = useCallback((type, text) => {
     setFeedbackMessage({ type, text });
     setTimeout(() => setFeedbackMessage({ type: '', text: '' }), 3000);
   }, []);
 
-  useEffect(() => {
-    if (!app || !auth) {
-      console.error("Firebase não inicializado corretamente.");
-      return;
-    }
+  // --- Efeitos (useEffect) ---
 
+  // Efeito de Autenticação
+  useEffect(() => {
+    if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setUserId(user.uid);
-        setUserEmail(user.email || 'N/A');
-        const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/data`);
-        const userDocSnap = await getDoc(userDocRef);
-        if (userDocSnap.exists()) {
-          setUserCPF(userDocSnap.data().cpf || '');
-        } else {
-          setUserCPF('');
+        setUserEmail(user.email || (user.isAnonymous ? 'Anônimo' : 'N/A'));
+        if (!user.isAnonymous) {
+            const userDocRef = doc(db, `artifacts/${appId}/users/${user.uid}/profile/data`);
+            const userDocSnap = await getDoc(userDocRef);
+            if (userDocSnap.exists()) {
+                setUserCPF(userDocSnap.data().cpf || '');
+            } else {
+                setUserCPF('');
+            }
         }
       } else {
-        setUserId(null);
-        setUserEmail('');
-        setUserCPF('');
         try {
           if (initialAuthToken) {
             await signInWithCustomToken(auth, initialAuthToken);
-            setUserId(auth.currentUser?.uid);
-            setUserEmail(auth.currentUser?.email || 'N/A');
           } else {
             await signInAnonymously(auth);
-            setUserId(auth.currentUser?.uid);
-            setUserEmail(auth.currentUser?.email || 'Anónimo');
           }
         } catch (error) {
           console.error("Erro na autenticação Firebase inicial:", error);
           setUserId(crypto.randomUUID());
-          setUserEmail('Anónimo (Erro de Autenticação)');
+          setUserEmail('Anônimo (Erro de Autenticação)');
         }
       }
       setIsAuthReady(true);
     });
-
     return () => unsubscribe();
-  }, [initialAuthToken]);
+  }, []);
+
+  // Efeitos para buscar dados do Firestore
+  useEffect(() => {
+    if (!isAuthReady || !userId || !db) return;
+    const promptsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/prompts`);
+    const qPrompts = query(promptsCollectionRef, orderBy('createdAt', 'desc'));
+    const unsubPrompts = onSnapshot(qPrompts, (snapshot) => {
+      setUserPrompts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      console.error("Erro ao buscar prompts:", error);
+      showFeedback('error', 'Erro ao carregar seu histórico.');
+    });
+    return () => unsubPrompts();
+  }, [isAuthReady, userId, showFeedback]);
 
   useEffect(() => {
-    if (isAuthReady && userId && db) {
-      const promptsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/prompts`);
-      const qPrompts = query(promptsCollectionRef, orderBy('createdAt', 'desc'));
-      const unsubscribePrompts = onSnapshot(qPrompts, (snapshot) => {
-        const promptsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setUserPrompts(promptsData);
-      }, (error) => {
-        console.error("Erro ao buscar prompts:", error);
-        showFeedback('error', 'Erro ao carregar o seu histórico de prompts.');
-      });
+    if (!isAuthReady || !userId || !db) return;
+    const charactersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/characters`);
+    const qCharacters = query(charactersCollectionRef, orderBy('name', 'asc'));
+    const unsubCharacters = onSnapshot(qCharacters, (snapshot) => {
+      setUserCharacters(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      console.error("Erro ao buscar personagens:", error);
+      showFeedback('error', 'Erro ao carregar seus personagens.');
+    });
+    return () => unsubCharacters();
+  }, [isAuthReady, userId, showFeedback]);
 
-      const charactersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/characters`);
-      const qCharacters = query(charactersCollectionRef, orderBy('name', 'asc'));
-      const unsubscribeCharacters = onSnapshot(qCharacters, (snapshot) => {
-        const newCharactersData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        if (JSON.stringify(newCharactersData) !== JSON.stringify(userCharacters)) {
-          setUserCharacters(newCharactersData);
-        }
-      }, (error) => {
-        console.error("Erro ao buscar personagens:", error);
-        showFeedback('error', 'Erro ao carregar os seus personagens.');
-      });
+  useEffect(() => {
+    if (!isAuthReady || !userId || !db) return;
+    const storiesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories`);
+    const qStories = query(storiesCollectionRef, orderBy('createdAt', 'desc'));
+    const unsubStories = onSnapshot(qStories, (snapshot) => {
+      setUserStories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      console.error("Erro ao buscar histórias:", error);
+      showFeedback('error', 'Erro ao carregar suas histórias.');
+    });
+    return () => unsubStories();
+  }, [isAuthReady, userId, showFeedback]);
 
-      // Fetch user stories
-      const storiesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories`);
-      const qStories = query(storiesCollectionRef, orderBy('createdAt', 'desc'));
-      const unsubscribeStories = onSnapshot(qStories, (snapshot) => {
-        const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setUserStories(storiesData);
-      }, (error) => {
-        console.error("Erro ao buscar histórias:", error);
-        showFeedback('error', 'Erro ao carregar as suas histórias.');
-      });
-
-      // Fetch user custom camera types
-      const cameraTypesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/cameraTypes`);
-      const qCameraTypes = query(cameraTypesCollectionRef, orderBy('name', 'asc'));
-      const unsubscribeCameraTypes = onSnapshot(qCameraTypes, (snapshot) => {
-        const cameraTypesData = snapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name }));
-        setUserCustomCameraTypes(cameraTypesData);
-      }, (error) => {
-        console.error("Erro ao buscar tipos de câmera personalizados:", error);
-        showFeedback('error', 'Erro ao carregar tipos de câmera personalizados.');
-      });
-
-
-      return () => {
-        unsubscribePrompts();
-        unsubscribeCharacters();
-        unsubscribeStories();
-        unsubscribeCameraTypes();
-      };
-    }
-  }, [isAuthReady, userId, db, userCharacters, showFeedback]);
-
-  const handleSetVideoStyle = useCallback((value) => setVideoStyle(value), []);
-  const handleSetTheme = useCallback((value) => setTheme(value), []);
-  const handleSetNarrative = useCallback((value) => setNarrative(value), []);
-  const handleSetCharacters = useCallback((value) => setCharacters(value), []);
-  const handleSetCameraType = useCallback((value) => setCameraType(value), []);
-  const handleSetLighting = useCallback((value) => setLighting(value), []);
-  const handleSetColorPalette = useCallback((value) => setColorPalette(value), []);
-  const handleSetDuration = useCallback((value) => setDuration(value), []);
-  const handleSetFormat = useCallback((value) => setFormat(value), []);
-  const handleSetQuality = useCallback((value) => setQuality(value), []);
-  const handleSetOutputLanguage = useCallback((value) => setOutputLanguage(value), []);
-  const handleSetVoiceNaration = useCallback((value) => setVoiceNaration(value), []); // Corrected spelling
-  const handleSetAuthEmail = useCallback((value) => setAuthEmail(value), []);
-  const handleSetAuthPassword = useCallback((value) => setAuthPassword(value), []);
-  const handleSetUserCPF = useCallback((value) => setUserCPF(value), []);
-  const handleSetNewCharacterName = useCallback((value) => setNewCharacterName(value), []);
-  const handleSetNewCharacterDescription = useCallback((value) => setNewCharacterDescription(value), []);
-  const handleSetNewCharacterVisuals = useCallback((value) => setNewCharacterVisuals(value), []);
-  const handleSetNewCharacterPersonality = useCallback((value) => setNewCharacterPersonality(value), []);
-  const handleSetYoutubeVideoId1 = useCallback((value) => setYoutubeVideoId1(value), []);
-  const handleSetYoutubeVideoId2 = useCallback((value) => setYoutubeVideoId2(value), []);
-  const handleSetYoutubeVideoId3 = useCallback((value) => setYoutubeVideoId3(value), []);
-  const handleSetYoutubeVideoId4 = useCallback((value) => setYoutubeVideoId4(value), []);
-  const handleSetHeaderMediaUrl = useCallback((value) => {
-    setHeaderMediaUrl(value);
-    setVideoLoadError(false);
-  }, []);
-  const handleSetEntryPageVideoUrl = useCallback((value) => {
-    setEntryPageVideoUrl(value);
-    setEntryPageVideoLoadError(false);
-  }, []);
-
-  // Camera Type Management Handlers
-  const handleSaveCameraType = useCallback(async () => {
-    if (!userId) {
-      showFeedback('error', "Inicie sessão para guardar tipos de câmera.");
-      return;
-    }
-    if (!newCameraTypeName.trim()) {
-      showFeedback('error', "O nome do tipo de câmera é obrigatório.");
-      return;
-    }
-
-    try {
-      const cameraTypesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/cameraTypes`);
-      if (editingCameraType) {
-        const cameraTypeDocRef = doc(db, cameraTypesCollectionRef.path, editingCameraType.id);
-        await updateDoc(cameraTypeDocRef, { name: newCameraTypeName, updatedAt: new Date() });
-        showFeedback('success', `Tipo de câmera "${newCameraTypeName}" atualizado!`);
-      } else {
-        await addDoc(cameraTypesCollectionRef, { name: newCameraTypeName, createdAt: new Date() });
-        showFeedback('success', `Tipo de câmera "${newCameraTypeName}" guardado!`);
-      }
-      setNewCameraTypeName('');
-      setEditingCameraType(null);
-    } catch (error) {
-      console.error("Erro ao guardar tipo de câmera:", error);
-      showFeedback('error', "Erro ao guardar tipo de câmera. Tente novamente.");
-    }
-  }, [userId, newCameraTypeName, editingCameraType, showFeedback]);
-
-  const handleEditCameraType = useCallback((cameraType) => {
-    setEditingCameraType(cameraType);
-    setNewCameraTypeName(cameraType.name);
-  }, []);
-
-  const handleDeleteCameraType = useCallback(async (cameraTypeId, cameraTypeName) => {
-    if (!userId) {
-      showFeedback('error', "Inicie sessão para excluir tipos de câmera.");
-      return;
-    }
-    if (window.confirm(`Tem a certeza que deseja excluir o tipo de câmera "${cameraTypeName}"?`)) {
-      try {
-        const cameraTypeDocRef = doc(db, `artifacts/${appId}/users/${userId}/cameraTypes`, cameraTypeId);
-        await deleteDoc(cameraTypeDocRef);
-        showFeedback('success', `Tipo de câmera "${cameraTypeName}" excluído!`);
-      } catch (error) {
-        console.error("Erro ao excluir tipo de câmera:", error);
-        showFeedback('error', "Erro ao excluir tipo de câmera. Tente novamente.");
-      }
-    }
-  }, [userId, showFeedback]);
-
-  const allCameraTypeOptions = [...defaultCameraTypeOptions, ...userCustomCameraTypes.map(c => c.name)];
+  useEffect(() => {
+    if (!isAuthReady || !userId || !db) return;
+    const cameraTypesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/cameraTypes`);
+    const qCameraTypes = query(cameraTypesCollectionRef, orderBy('name', 'asc'));
+    const unsubCameraTypes = onSnapshot(qCameraTypes, (snapshot) => {
+      setUserCustomCameraTypes(snapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name })));
+    }, (error) => {
+      console.error("Erro ao buscar tipos de câmera:", error);
+      showFeedback('error', 'Erro ao carregar tipos de câmera.');
+    });
+    return () => unsubCameraTypes();
+  }, [isAuthReady, userId, showFeedback]);
+ 
+  // Efeito para buscar capítulos da história selecionada
+  useEffect(() => {
+    if (!isAuthReady || !userId || !db || !selectedStory) return;
+    const chaptersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories/${selectedStory.id}/chapters`);
+    const qChapters = query(chaptersCollectionRef, orderBy('chapterNumber', 'asc'));
+    const unsubChapters = onSnapshot(qChapters, (snapshot) => {
+        const chaptersData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setSelectedStory(prev => ({ ...prev, chapters: chaptersData }));
+    }, (error) => {
+        console.error("Erro ao buscar capítulos:", error);
+        showFeedback('error', 'Erro ao carregar capítulos da história.');
+    });
+    return () => unsubChapters();
+  }, [isAuthReady, userId, selectedStory?.id, showFeedback]);
 
 
+  // --- Handlers de Geração de Conteúdo ---
+ 
   const buildInputPromptForAI = useCallback(() => {
     let inputPrompt = `Gere um prompt de vídeo detalhado e profissional para IA (como Veo, Sora, Runway).`;
     inputPrompt += ` O prompt final deve ser na língua ${outputLanguage === 'english' ? 'inglesa' : 'portuguesa'}.`;
     inputPrompt += ` Inclua todos os detalhes fornecidos e adicione elementos cinematográficos para torná-lo envolvente. O prompt deve ser direto e otimizado para modelos de texto para vídeo.`;
 
-    if (characters.length > 0) {
+    if (selectedCharacters.length > 0) {
       inputPrompt += "\n\nPersonagens Envolvidos e as suas Descrições (Mantenha Consistência):";
-      characters.forEach(charId => {
+      selectedCharacters.forEach(charId => {
         const character = userCharacters.find(uc => uc.id === charId);
         if (character) {
           inputPrompt += `\n- Nome: ${character.name}`;
@@ -474,107 +429,82 @@ const App = () => {
     if (duration) inputPrompt += `\nDuração: ${duration} segundos.`;
     if (format) inputPrompt += `\nFormato: ${format}.`;
     if (quality) inputPrompt += `\nQualidade e Detalhes: ${quality}.`;
-    if (voiceNarration) inputPrompt += `\nVoz/Narração: ${voiceNarration}.`;
+    if (voiceNarration && voiceNarration !== 'Sem Narração') inputPrompt += `\nVoz/Narração: Use uma voz com a característica: ${voiceNarration}.`;
 
     inputPrompt += `\n\nO prompt final deve ser conciso, cinematográfico e pronto para uso em ferramentas de IA na língua ${outputLanguage === 'english' ? 'inglesa' : 'portuguesa'}. Priorize a consistência dos personagens descritos.`;
     return inputPrompt;
-  }, [videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration, userCharacters, outputLanguage]);
+  }, [videoStyle, theme, narrative, selectedCharacters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration, userCharacters, outputLanguage]);
 
+  // CORRIGIDO: Esta função agora chama a Cloud Function segura.
   const generatePromptWithAI = useCallback(async () => {
     setIsLoadingPrompt(true);
     setGeneratedPrompt('');
     showFeedback('', '');
 
-    const prompt = buildInputPromptForAI();
-    let chatHistory = [];
-    chatHistory.push({ role: "user", parts: [{ text: prompt }] });
-
-    const payload = { contents: chatHistory };
-    const apiKey = "";
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
     try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+        const prompt = buildInputPromptForAI();
+        const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`Erro da API: ${response.status} - ${errorData.error?.message || response.statusText}`);
-      }
+        // Chama a Cloud Function que criamos
+        const generatePromptFunction = httpsCallable(functions, 'generatePrompt');
+        const result = await generatePromptFunction({ payload });
 
-      const result = await response.json();
-
-      if (result.candidates && result.candidates.length > 0 &&
-          result.candidates[0].content && result.candidates[0].content.parts &&
-          result.candidates[0].content.parts.length > 0) {
-        const text = result.candidates[0].content.parts[0].text;
-        setGeneratedPrompt(text);
-        showFeedback('success', 'Prompt gerado com sucesso pela IA!');
-      } else {
-        showFeedback('error', 'A IA não conseguiu gerar um prompt. Tente novamente com mais detalhes.');
-        console.error("Estrutura de resposta inesperada da API:", result);
-      }
+        const text = result.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        
+        if (text) {
+            setGeneratedPrompt(text);
+            showFeedback('success', 'Prompt gerado com sucesso pela IA!');
+        } else {
+            console.error("Resposta da API inválida:", result.data);
+            throw new Error('A IA não retornou um texto válido.');
+        }
     } catch (error) {
-      showFeedback('error', `Erro ao gerar prompt: ${error.message}`);
-      console.error("Erro ao chamar a API Gemini:", error);
+        showFeedback('error', `Erro ao gerar prompt: ${error.message}`);
+        console.error("Erro ao chamar a Cloud Function:", error);
     } finally {
-      setIsLoadingPrompt(false);
+        setIsLoadingPrompt(false);
     }
   }, [buildInputPromptForAI, showFeedback]);
-
-  const copyPrompt = useCallback(() => {
-    if (generatedPrompt) {
-      const textarea = document.createElement('textarea');
-      textarea.value = generatedPrompt;
-      document.body.appendChild(textarea);
-      textarea.select();
-      try {
-        document.execCommand('copy');
-        setShowCopiedMessage(true);
-        setTimeout(() => setShowCopiedMessage(false), 2000);
+ 
+  // CORRIGIDO: Usa a API de Clipboard moderna em vez de `execCommand`.
+  const copyPrompt = useCallback(async () => {
+    if (!generatedPrompt) {
+        showFeedback('error', 'Nenhum prompt para copiar!');
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(generatedPrompt);
         showFeedback('success', 'Prompt copiado para a área de transferência!');
-      } catch (err) {
-        console.error('Falha ao copiar:', err);
+    } catch (err) {
+        console.error('Falha ao copiar o texto: ', err);
         showFeedback('error', 'Não foi possível copiar o prompt.');
-      }
-      document.body.removeChild(textarea);
-    } else {
-      showFeedback('error', 'Nenhum prompt para copiar!');
     }
   }, [generatedPrompt, showFeedback]);
 
   const savePrompt = useCallback(async () => {
-    if (!userId) {
-      showFeedback('error', "Por favor, inicie sessão para guardar os seus prompts.");
+    if (!userId || !generatedPrompt) {
+      showFeedback('error', !userId ? "Por favor, inicie sessão para guardar prompts." : "Nenhum prompt para guardar!");
       return;
     }
-    if (!generatedPrompt) {
-      showFeedback('error', "Nenhum prompt para guardar!");
-      return;
-    }
-
     try {
       const promptsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/prompts`);
       await addDoc(promptsCollectionRef, {
         prompt: generatedPrompt,
         createdAt: new Date(),
-        videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration
+        videoStyle, theme, narrative, characters: selectedCharacters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration
       });
       showFeedback('success', "Prompt guardado com sucesso!");
     } catch (error) {
       console.error("Erro ao guardar o prompt:", error);
       showFeedback('error', "Erro ao guardar o prompt. Tente novamente.");
     }
-  }, [userId, generatedPrompt, videoStyle, theme, narrative, characters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration, showFeedback]);
+  }, [userId, generatedPrompt, videoStyle, theme, narrative, selectedCharacters, cameraType, lighting, colorPalette, duration, format, quality, voiceNarration, showFeedback, appId]);
 
   const resetForm = useCallback(() => {
     setVideoStyle('');
     setTheme('');
     setNarrative('');
-    setCharacters([]);
+    setSelectedCharacters([]);
     setCameraType('');
     setLighting('');
     setColorPalette('');
@@ -583,40 +513,33 @@ const App = () => {
     setQuality('');
     setGeneratedPrompt('');
     setOutputLanguage('portuguese');
-    setVoiceNaration('');
+    setVoiceNarration('');
     showFeedback('', '');
   }, [showFeedback]);
 
-  const handleSaveCharacter = useCallback(async () => {
-    if (!userId) {
-      showFeedback('error', "Inicie sessão para guardar personagens.");
-      return;
-    }
-    if (!newCharacterName.trim()) {
-      showFeedback('error', "O nome do personagem é obrigatório.");
-      return;
-    }
 
+  // --- Handlers de Gerenciamento (Personagens, Séries, Câmeras) ---
+ 
+  const handleSaveCharacter = useCallback(async () => {
+    if (!userId || !newCharacterName.trim()) {
+      showFeedback('error', !userId ? "Inicie sessão para guardar personagens." : "O nome do personagem é obrigatório.");
+      return;
+    }
     try {
       const charactersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/characters`);
-      if (editingCharacter) {
-        const charDocRef = doc(db, charactersCollectionRef.path, editingCharacter.id);
-        await updateDoc(charDocRef, {
+      const data = {
           name: newCharacterName,
           description: newCharacterDescription,
           visualTraits: newCharacterVisuals,
           personalityTraits: newCharacterPersonality,
           updatedAt: new Date()
-        });
+      };
+      if (editingCharacter) {
+        const charDocRef = doc(db, charactersCollectionRef.path, editingCharacter.id);
+        await updateDoc(charDocRef, data);
         showFeedback('success', `Personagem "${newCharacterName}" atualizado!`);
       } else {
-        await addDoc(charactersCollectionRef, {
-          name: newCharacterName,
-          description: newCharacterDescription,
-          visualTraits: newCharacterVisuals,
-          personalityTraits: newCharacterPersonality,
-          createdAt: new Date()
-        });
+        await addDoc(charactersCollectionRef, { ...data, createdAt: new Date() });
         showFeedback('success', `Personagem "${newCharacterName}" guardado!`);
       }
       setNewCharacterName('');
@@ -628,60 +551,153 @@ const App = () => {
       console.error("Erro ao guardar personagem:", error);
       showFeedback('error', "Erro ao guardar personagem. Tente novamente.");
     }
-  }, [userId, newCharacterName, newCharacterDescription, newCharacterVisuals, newCharacterPersonality, editingCharacter, showFeedback]);
+  }, [userId, newCharacterName, newCharacterDescription, newCharacterVisuals, newCharacterPersonality, editingCharacter, showFeedback, appId]);
 
   const handleEditCharacter = useCallback((character) => {
     setEditingCharacter(character);
     setNewCharacterName(character.name);
-    setNewCharacterDescription(character.description);
-    setNewCharacterVisuals(character.visualTraits);
-    setNewCharacterPersonality(character.personalityTraits);
+    setNewCharacterDescription(character.description || '');
+    setNewCharacterVisuals(character.visualTraits || '');
+    setNewCharacterPersonality(character.personalityTraits || '');
   }, []);
 
-  const handleDeleteCharacter = useCallback(async (charId, charName) => {
-    if (!userId) {
-      showFeedback('error', "Inicie sessão para excluir personagens.");
+  const handleDeleteCharacter = useCallback(async (charId) => {
+    if (!userId) return;
+    try {
+      const charDocRef = doc(db, `artifacts/${appId}/users/${userId}/characters`, charId);
+      await deleteDoc(charDocRef);
+      showFeedback('success', `Personagem excluído!`);
+    } catch (error) {
+      console.error("Erro ao excluir personagem:", error);
+      showFeedback('error', "Erro ao excluir personagem.");
+    } finally {
+        setConfirmationModal({ isOpen: false });
+    }
+  }, [userId, showFeedback, appId]);
+
+  const openDeleteCharacterModal = (char) => {
+    setConfirmationModal({
+        isOpen: true,
+        title: 'Excluir Personagem',
+        message: `Tem a certeza que deseja excluir o personagem "${char.name}"? Esta ação não pode ser desfeita.`,
+        onConfirm: () => handleDeleteCharacter(char.id),
+        onCancel: () => setConfirmationModal({ isOpen: false })
+    });
+  };
+
+  const handleCreateStory = useCallback(async () => {
+    if (!userId || !newStoryTitle.trim() || !newStoryCharacterId) {
+      showFeedback('error', "Título da série e personagem principal são obrigatórios.");
       return;
     }
-    if (window.confirm(`Tem a certeza que deseja excluir o personagem "${charName}"?`)) {
-      try {
-        const charDocRef = doc(db, `artifacts/${appId}/users/${userId}/characters`, charId);
-        await deleteDoc(charDocRef);
-        showFeedback('success', `Personagem "${charName}" excluído!`);
-      } catch (error) {
-        console.error("Erro ao excluir personagem:", error);
-        showFeedback('error', "Erro ao excluir personagem. Tente novamente.");
-      }
-    }
-  }, [userId, showFeedback]);
-
-  const handleRegister = useCallback(async () => {
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-      const user = userCredential.user;
-      await setDoc(doc(db, `artifacts/${appId}/users/${user.uid}/profile/data`), {
-        email: user.email,
+      const storiesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories`);
+      await addDoc(storiesCollectionRef, {
+        title: newStoryTitle,
+        description: newStoryDescription,
+        characterId: newStoryCharacterId,
         createdAt: new Date(),
-        cpf: ''
       });
-      showFeedback('success', 'Registo concluído com sucesso! Está com sessão iniciada.');
-      setShowAuthModal(false);
-    } catch (error) {
-      showFeedback('error', `Erro no registo: ${error.message}`);
-      console.error("Erro no registo:", error);
+      showFeedback('success', `Série "${newStoryTitle}" criada com sucesso!`);
+      setNewStoryTitle('');
+      setNewStoryDescription('');
+      setNewStoryCharacterId('');
+    } catch (error)
+    {
+      console.error("Erro ao criar série:", error);
+      showFeedback('error', "Erro ao criar série. Tente novamente.");
     }
-  }, [authEmail, authPassword, showFeedback]);
+  }, [userId, newStoryTitle, newStoryDescription, newStoryCharacterId, showFeedback, appId]);
 
-  const handleLogin = useCallback(async () => {
+  const handleViewStoryChapters = useCallback((story) => {
+      setSelectedStory(story);
+  }, []);
+ 
+  // CORRIGIDO: Adicionadas as dependências necessárias ao hook.
+  // A implementação real de adicionar capítulo ainda precisa ser desenvolvida aqui.
+  const handleAddChapter = useCallback(async () => {
+    // A lógica para gerar e salvar um novo capítulo iria aqui.
+    // Ex: Chamar a IA para criar uma narrativa, depois salvar no Firestore.
+    showFeedback('info', 'Funcionalidade de adicionar capítulo ainda não implementada.');
+  }, [selectedStory, newChapterNarrative, userId, showFeedback, appId]);
+
+  const handleSaveCameraType = useCallback(async () => {
+    if (!userId || !newCameraTypeName.trim()) {
+      showFeedback('error', !userId ? "Inicie sessão para guardar." : "O nome do tipo de câmera é obrigatório.");
+      return;
+    }
     try {
-      await signInWithEmailAndPassword(auth, authEmail, authPassword);
-      showFeedback('success', 'Sessão iniciada com sucesso!');
+      const cameraTypesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/cameraTypes`);
+      if (editingCameraType) {
+        const cameraTypeDocRef = doc(db, cameraTypesCollectionRef.path, editingCameraType.id);
+        await updateDoc(cameraTypeDocRef, { name: newCameraTypeName, updatedAt: new Date() });
+        showFeedback('success', `Tipo de câmera atualizado!`);
+      } else {
+        await addDoc(cameraTypesCollectionRef, { name: newCameraTypeName, createdAt: new Date() });
+        showFeedback('success', `Tipo de câmera guardado!`);
+      }
+      setNewCameraTypeName('');
+      setEditingCameraType(null);
+    } catch (error) {
+      console.error("Erro ao guardar tipo de câmera:", error);
+      showFeedback('error', "Erro ao guardar tipo de câmera.");
+    }
+  }, [userId, newCameraTypeName, editingCameraType, showFeedback, appId]);
+
+  const handleEditCameraType = useCallback((cameraType) => {
+    setEditingCameraType(cameraType);
+    setNewCameraTypeName(cameraType.name);
+  }, []);
+
+  const handleDeleteCameraType = useCallback(async (cameraTypeId) => {
+    if (!userId) return;
+    try {
+      const cameraTypeDocRef = doc(db, `artifacts/${appId}/users/${userId}/cameraTypes`, cameraTypeId);
+      await deleteDoc(cameraTypeDocRef);
+      showFeedback('success', `Tipo de câmera excluído!`);
+    } catch (error) {
+      console.error("Erro ao excluir tipo de câmera:", error);
+      showFeedback('error', "Erro ao excluir tipo de câmera.");
+    } finally {
+        setConfirmationModal({ isOpen: false });
+    }
+  }, [userId, showFeedback, appId]);
+ 
+  const openDeleteCameraTypeModal = (cameraType) => {
+    setConfirmationModal({
+        isOpen: true,
+        title: 'Excluir Tipo de Câmera',
+        message: `Tem a certeza que deseja excluir o tipo de câmera "${cameraType.name}"?`,
+        onConfirm: () => handleDeleteCameraType(cameraType.id),
+        onCancel: () => setConfirmationModal({ isOpen: false })
+    });
+  };
+
+  // --- Handlers de Autenticação e Perfil ---
+ 
+  const handleAuthAction = useCallback(async (e) => {
+    e.preventDefault();
+    const action = isRegisterMode ? createUserWithEmailAndPassword : signInWithEmailAndPassword;
+    const successMessage = isRegisterMode ? 'Registo concluído com sucesso!' : 'Sessão iniciada com sucesso!';
+    const errorMessage = isRegisterMode ? 'Erro no registo:' : 'Erro ao iniciar sessão:';
+
+    try {
+      const userCredential = await action(auth, authEmail, authPassword);
+      if (isRegisterMode) {
+        const user = userCredential.user;
+        await setDoc(doc(db, `artifacts/${appId}/users/${user.uid}/profile/data`), {
+          email: user.email,
+          createdAt: new Date(),
+          cpf: ''
+        });
+      }
+      showFeedback('success', successMessage);
       setShowAuthModal(false);
     } catch (error) {
-      showFeedback('error', `Erro ao iniciar sessão: ${error.message}`);
-      console.error("Erro ao iniciar sessão:", error);
+      showFeedback('error', `${errorMessage} ${error.message}`);
+      console.error(errorMessage, error);
     }
-  }, [authEmail, authPassword, showFeedback]);
+  }, [isRegisterMode, authEmail, authPassword, showFeedback, appId]);
 
   const handleGoogleSignIn = useCallback(async () => {
     try {
@@ -703,13 +719,13 @@ const App = () => {
       showFeedback('error', `Erro ao iniciar sessão com Google: ${error.message}`);
       console.error("Erro ao iniciar sessão com Google:", error);
     }
-  }, [showFeedback]);
+  }, [showFeedback, appId]);
 
   const handleLogout = useCallback(async () => {
     try {
       await signOut(auth);
       showFeedback('success', 'Sessão terminada com sucesso!');
-      await signInAnonymously(auth);
+      // A transição para anónimo é gerida pelo onAuthStateChanged
     } catch (error) {
       showFeedback('error', `Erro ao terminar sessão: ${error.message}`);
       console.error("Erro ao terminar sessão:", error);
@@ -717,1462 +733,405 @@ const App = () => {
   }, [showFeedback]);
 
   const handleSaveProfile = useCallback(async () => {
-    if (!userId) {
-      showFeedback('error', "Utilizador não autenticado.");
-      return;
-    }
+    if (!userId) return;
     try {
       const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/profile/data`);
-      await setDoc(userDocRef, {
-        email: userEmail,
-        cpf: userCPF,
-        updatedAt: new Date()
-      }, { merge: true });
+      await setDoc(userDocRef, { email: userEmail, cpf: userCPF, updatedAt: new Date() }, { merge: true });
       showFeedback('success', 'Perfil atualizado com sucesso!');
       setShowProfileModal(false);
     } catch (error) {
       showFeedback('error', `Erro ao guardar perfil: ${error.message}`);
       console.error("Erro ao guardar perfil:", error);
     }
-  }, [userId, userEmail, userCPF, showFeedback]);
+  }, [userId, userEmail, userCPF, showFeedback, appId]);
+ 
+  // --- Memos para Otimização ---
+  const allCameraTypeOptions = useMemo(() => 
+    [...defaultCameraTypeOptions, ...userCustomCameraTypes.map(c => c.name)], 
+    [userCustomCameraTypes]
+  );
+ 
+  const isUserLoggedIn = auth.currentUser && !auth.currentUser.isAnonymous;
 
-  const handleEnterPlatform = useCallback(() => {
-    setTimeout(() => {
-      setShowEntryPage(false);
-    }, 500);
-  }, []);
+  // --- Renderização ---
 
-  const isYouTubeVideo = (url) => {
-    return url.includes('youtube.com/watch?v=') || url.includes('youtu.be/');
-  };
-
-  const getYouTubeVideoId = (url) => {
-    let videoId = '';
-    const youtubeRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
-    const match = url.match(youtubeRegex);
-    if (match && match[1]) {
-      videoId = match[1];
-    }
-    return videoId;
-  };
-
-  // Story/Series Management Functions
-  const handleCreateStory = useCallback(async () => {
-    if (!userId) {
-      showFeedback('error', "Inicie sessão para criar histórias.");
-      return;
-    }
-    if (!newStoryTitle.trim() || !newStoryCharacterId) {
-      showFeedback('error', "Título da série e personagem principal são obrigatórios.");
-      return;
-    }
-
-    try {
-      const storiesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories`);
-      await addDoc(storiesCollectionRef, {
-        title: newStoryTitle,
-        description: newStoryDescription,
-        characterId: newStoryCharacterId,
-        createdAt: new Date(),
-        chapters: [] // Initialize with empty chapters array
-      });
-      showFeedback('success', `Série "${newStoryTitle}" criada com sucesso!`);
-      setNewStoryTitle('');
-      setNewStoryDescription('');
-      setNewStoryCharacterId('');
-    } catch (error) {
-      console.error("Erro ao criar série:", error);
-      showFeedback('error', "Erro ao criar série. Tente novamente.");
-    }
-  }, [userId, newStoryTitle, newStoryDescription, newStoryCharacterId, showFeedback]);
-
-  const handleViewStoryChapters = useCallback(async (story) => {
-    setSelectedStory(story);
-    // Fetch chapters for the selected story
-    const chaptersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories/${story.id}/chapters`);
-    const qChapters = query(chaptersCollectionRef, orderBy('chapterNumber', 'asc'));
-    onSnapshot(qChapters, (snapshot) => {
-      const chaptersData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setSelectedStory(prev => ({ ...prev, chapters: chaptersData }));
-    }, (error) => {
-      console.error("Erro ao buscar capítulos:", error);
-      showFeedback('error', 'Erro ao carregar capítulos da história.');
-    });
-  }, [userId, showFeedback]);
-
-  const handleAddChapter = useCallback(async () => {
-    if (!userId || !selectedStory) {
-      showFeedback('error', "Selecione uma série para adicionar um capítulo.");
-      return;
-    }
-
-    setIsGeneratingChapterContent(true);
-    setGeneratedPrompt('');
-    setGeneratedChapterAudioUrl('');
-
-    const character = userCharacters.find(char => char.id === selectedStory.characterId);
-    if (!character) {
-      showFeedback('error', "Personagem principal da série não encontrado.");
-      setIsGeneratingChapterContent(false);
-      return;
-    }
-
-    let currentChapterNarrative = newChapterNarrative.trim();
-    let aiGeneratedNarrative = '';
-
-    // If user didn't provide narrative, ask AI to generate it
-    if (!currentChapterNarrative) {
-      const previousChapter = selectedStory.chapters?.[selectedStory.chapters.length - 1];
-      let narrativePrompt = `Gere uma narrativa detalhada e criativa para o próximo capítulo da série "${selectedStory.title}".`;
-      narrativePrompt += ` O personagem principal é ${character.name} (${character.description}, ${character.visualTraits}, ${character.personalityTraits}).`;
-      if (selectedStory.description) {
-        narrativePrompt += ` A série é sobre: ${selectedStory.description}.`;
-      }
-      if (previousChapter && previousChapter.narrative) {
-        narrativePrompt += ` O capítulo anterior terminou com: "${previousChapter.narrative}". Continue a história a partir daí.`;
-      }
-      narrativePrompt += ` A narrativa deve ser envolvente, detalhada e pronta para ser usada como base para um prompt de vídeo.`;
-
-      try {
-        const chatHistory = [{ role: "user", parts: [{ text: narrativePrompt }] }];
-        const payload = { contents: chatHistory };
-        const apiKey = "";
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=`;
-
-        const response = await fetch(apiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const result = await response.json();
-        aiGeneratedNarrative = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        currentChapterNarrative = aiGeneratedNarrative; // Use AI-generated narrative
-        setNewChapterNarrative(aiGeneratedNarrative); // Update the input field with AI's narrative
-      } catch (error) {
-        console.error("Erro ao gerar narrativa do capítulo com IA:", error);
-        showFeedback('error', 'Erro ao gerar narrativa do capítulo. Tente novamente.');
-        setIsGeneratingChapterContent(false);
-        return;
-      }
-    }
-
-    if (!currentChapterNarrative) {
-      showFeedback('error', "Não foi possível gerar a narrativa do capítulo. Por favor, tente novamente ou forneça uma manualmente.");
-      setIsGeneratingChapterContent(false);
-      return;
-    }
-
-    // Now, generate the video prompt and audio based on currentChapterNarrative
-    const videoPromptText = `Com base na seguinte narrativa do capítulo: "${currentChapterNarrative}", e considerando o personagem principal ${character.name} (${character.visualTraits}, ${character.personalityTraits}), gere um prompt de vídeo cinematográfico e detalhado para IA. Inclua estilo de vídeo (${selectedStory.videoStyle || 'Cinematográfico'}), iluminação (${selectedStory.lighting || 'Padrão'}), paleta de cores (${selectedStory.colorPalette || 'Padrão'}) e movimentos de câmera (${selectedStory.cameraType || 'Padrão'}).`;
-
-    try {
-      let chatHistoryVideo = [{ role: "user", parts: [{ text: videoPromptText }] }];
-      const videoPromptPayload = { contents: chatHistoryVideo };
-      const videoPromptApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=`;
-
-      const videoPromptResponse = await fetch(videoPromptApiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(videoPromptPayload)
-      });
-      const videoPromptResult = await videoPromptResponse.json();
-      const generatedVideoPrompt = videoPromptResult.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      setGeneratedPrompt(generatedVideoPrompt);
-
-      let audioUrl = '';
-      if (selectedStory.voiceNarration && currentChapterNarrative) {
-        const ttsPayload = {
-          contents: [{ parts: [{ text: currentChapterNarrative }] }], // Use the generated narrative for TTS
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName: selectedStory.voiceNarration }
-              }
-            }
-          },
-          model: "gemini-2.5-flash-preview-tts"
-        };
-        const ttsApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=`;
-
-        const ttsResponse = await fetch(ttsApiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(ttsPayload)
-        });
-        const ttsResult = await ttsResponse.json();
-        const audioPart = ttsResult?.candidates?.[0]?.content?.parts?.[0];
-
-        if (audioPart && audioPart.inlineData && audioPart.inlineData.data) {
-          const audioData = audioPart.inlineData.data;
-          const mimeType = audioPart.inlineData.mimeType;
-          const sampleRateMatch = mimeType.match(/rate=(\d+)/);
-          const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 16000;
-          const pcmData = Uint8Array.from(atob(audioData), c => c.charCodeAt(0));
-          const pcm16 = new Int16Array(pcmData.buffer);
-          const wavBlob = pcmToWav(pcm16, sampleRate);
-          audioUrl = URL.createObjectURL(wavBlob);
-        } else {
-          console.error("TTS: Estrutura de resposta inesperada ou dados de áudio ausentes.", ttsResult);
-          showFeedback('error', 'Erro ao gerar áudio. Dados de áudio ausentes.');
-        }
-      }
-
-      const chaptersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories/${selectedStory.id}/chapters`);
-      await addDoc(chaptersCollectionRef, {
-        chapterNumber: (selectedStory.chapters?.length || 0) + 1,
-        narrative: currentChapterNarrative,
-        generatedPrompt: generatedVideoPrompt,
-        generatedAudioUrl: audioUrl,
-        createdAt: new Date()
-      });
-      showFeedback('success', 'Capítulo adicionado e conteúdo gerado!');
-      setNewChapterNarrative('');
-      setGeneratedChapterAudioUrl(audioUrl);
-
-    } catch (error) {
-      console.error("Erro ao adicionar capítulo ou gerar conteúdo:", error);
-      showFeedback('error', `Erro: ${error.message}`);
-    } finally {
-      setIsGeneratingChapterContent(false);
-    }
-  }, [userId, selectedStory, newChapterNarrative, userCharacters, showFeedback]);
-
-  // Helper function to convert PCM to WAV (from previous examples)
-  const pcmToWav = (pcmData, sampleRate) => {
-    const pcmLength = pcmData.length;
-    const wavBuffer = new ArrayBuffer(44 + pcmLength * 2); // 44 bytes for WAV header, 2 bytes per sample for PCM16
-    const view = new DataView(wavBuffer);
-
-    // RIFF identifier
-    writeString(view, 0, 'RIFF');
-    // file length
-    view.setUint32(4, 36 + pcmLength * 2, true);
-    // RIFF type
-    writeString(view, 8, 'WAVE');
-    // format chunk identifier
-    view.setUint32(12, 16, true);
-    // format chunk length
-    view.setUint32(16, 16, true);
-    // sample format (raw)
-    view.setUint16(20, 1, true);
-    // channel count
-    view.setUint16(22, 1, true);
-    // sample rate
-    view.setUint32(24, sampleRate, true);
-    // byte rate (sample rate * block align)
-    view.setUint32(28, sampleRate * 2, true);
-    // block align (channel count * bytes per sample)
-    view.setUint16(32, 2, true);
-    // bits per sample
-    view.setUint16(34, 16, true);
-    // data chunk identifier
-    writeString(view, 36, 'data');
-    // data chunk length
-    view.setUint32(40, pcmLength * 2, true);
-
-    // Write PCM data
-    let offset = 44;
-    for (let i = 0; i < pcmLength; i++) {
-      view.setInt16(offset, pcmData[i], true);
-      offset += 2;
-    }
-
-    return new Blob([view], { type: 'audio/wav' });
-  };
-
-  const writeString = (view, offset, string) => {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
-  };
-
-
+  // O restante do código JSX (renderização) permanece o mesmo da sua versão original.
+  // Cole o seu JSX (a partir de `if (showEntryPage) { ... }`) aqui.
+  // ...
   if (showEntryPage) {
     return (
-      <div className="min-h-screen bg-gray-950 text-gray-100 font-sans flex flex-col items-center justify-center futuristic-background p-4">
-        <style>
-          {`
-          /* Importar a fonte Inter */
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-
-          /* Aplicar a fonte ao corpo e aos títulos */
-          body {
-            font-family: 'Inter', sans-serif;
-          }
-          h1, h2, h3, h4, h5, h6 {
-            font-family: 'Inter', sans-serif;
-          }
-
-          /* Keyframes para o brilho sutil da borda pulsante na página de entrada */
-          @keyframes pulse-border-subtle {
-            0% { border-color: rgba(168, 85, 247, 0.1); box-shadow: 0 0 2px rgba(168, 85, 247, 0.05); }
-            50% { border-color: rgba(168, 85, 247, 0.3); box-shadow: 0 0 5px rgba(168, 85, 247, 0.15); }
-            100% { border-color: rgba(168, 85, 247, 0.1); box-shadow: 0 0 2px rgba(168, 85, 247, 0.05); }
-          }
-          .pulsing-border-subtle {
-            animation: pulse-border-subtle 3.5s infinite ease-in-out;
-          }
-
-          /* Fundo escuro futurista com gradiente radial sutil */
-          .futuristic-background {
-            background: #0a0a0a; /* Fundo preto puro */
-            background-image: radial-gradient(circle at center, rgba(168, 85, 247, 0.08), rgba(59, 130, 246, 0.05), transparent 70%); /* Gradiente radial sutil */
-            background-size: 100% 100%;
-            animation: futuristic-background-animation 50s ease infinite alternate; /* Animação mais lenta e suave */
-            position: relative;
-            overflow: hidden;
-          }
-
-          /* Efeito de Glassmorphism aprimorado e mais discreto */
-          .glass-effect {
-            background-color: rgba(30, 41, 59, 0.3); /* Mais transparente */
-            backdrop-filter: blur(15px); /* Blur moderado */
-            -webkit-backdrop-filter: blur(15px);
-            border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
-            box-shadow: 0 0 8px rgba(168, 85, 247, 0.3), 0 0 12px rgba(168, 85, 247, 0.15); /* Sombra externa e brilho interno mais sutis */
-          }
-
-          /* Ajustes para brilho dos botões e títulos no resto da app */
-          .text-neon-glow {
-            text-shadow: none; /* Removido o brilho */
-            animation: none; /* Estático na app principal */
-          }
-          .text-neon-glow-subtle { /* Removido o brilho */
-            text-shadow: none;
-          }
-          
-          button {
-            box-shadow: 0 0 3px rgba(168, 85, 247, 0.1); /* Sombra base mais suave */
-            transition: box-shadow 0.3s ease-in-out, transform 0.1s ease-out;
-          }
-          button:hover {
-            box-shadow: 0 0 10px rgba(168, 85, 247, 0.4), 0 0 15px rgba(168, 85, 247, 0.2); /* Brilho no hover mais definido, mas suave */
-            transform: translateY(-1px); /* Leve elevação no hover */
-          }
-          .bg-blue-600:hover { box-shadow: 0 0 10px rgba(59, 130, 246, 0.4), 0 0 15px rgba(59, 130, 246, 0.2); }
-          .bg-emerald-600:hover { box-shadow: 0 0 10px rgba(16, 185, 129, 0.4), 0 0 15px rgba(16, 185, 129, 0.2); }
-          .bg-red-600:hover { box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), 0 0 15px rgba(239, 68, 68, 0.2); }
-          .bg-gray-700:hover { box-shadow: 0 0 8px rgba(156, 163, 175, 0.4), 0 0 10px rgba(156, 163, 175, 0.2); }
-
-          .glass-effect-input-subtle {
-            background-color: rgba(45, 55, 72, 0.3); /* bg-gray-700 com opacidade aumentada */
-            backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
-            border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
-          }
-
-          /* Nova variável para roxo mais suave */
-          :root {
-            --color-soft-purple: #a87fe7; /* Um roxo mais claro e menos saturado */
-          }
-          .text-soft-purple {
-            color: var(--color-soft-purple);
-          }
-          `}
-        </style>
-        <div className="text-center">
-          {/* Vídeo de Fundo na Página de Entrada */}
-          {entryPageVideoUrl && !entryPageVideoLoadError ? (
-            <video
-              autoPlay
-              loop
-              muted
-              playsInline
-              className="absolute inset-0 w-full h-full object-cover z-0"
-              src={entryPageVideoUrl}
-              onError={() => {
-                console.error("Erro ao carregar o vídeo da página de entrada. URL:", entryPageVideoUrl);
-                setEntryPageVideoLoadError(true);
-              }}
-              onLoadedData={() => {
-                console.log("Vídeo da página de entrada carregado com sucesso. URL:", entryPageVideoUrl);
-                setEntryPageVideoLoadError(false);
-              }}
-            >
-              Seu navegador não suporta a tag de vídeo.
-            </video>
-          ) : (
-            <div className="absolute inset-0 w-full h-full object-cover z-0 flex items-center justify-center bg-gray-800 text-gray-400 text-center">
-              {entryPageVideoLoadError ? (
-                <span>Erro ao carregar o vídeo da capa. Verifique o URL.</span>
-              ) : (
-                <span>Insira um URL de vídeo no campo "URL do Vídeo da Capa" para vê-lo aqui.</span>
-              )}
-            </div>
-          )}
-          {/* Camada de sobreposição para legibilidade */}
-          <div className="absolute inset-0 bg-black opacity-40 z-10"></div>
-
-          <img
-            src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1"
-            alt="Logo Conecta"
-            className="h-48 md:h-64 w-auto mx-auto mb-8 rounded-lg relative z-20" /* Removido pulsing-border-subtle e drop-shadow */
-            style={{ border: '2px solid transparent' }}
-          />
-          <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-4 relative z-20">
-            <span>Bem-vindo ao</span> <span className="text-purple-400">CinePrompt AI</span>
+      <div className="min-h-screen bg-gray-950 text-gray-100 font-sans flex flex-col items-center justify-center p-4">
+         <style>{`
+           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap');
+           body, h1, h2, h3, button, input, select, textarea { font-family: 'Inter', sans-serif; }
+           .futuristic-background { background: #0a0a0a; background-image: radial-gradient(circle at center, rgba(168, 85, 247, 0.08), rgba(59, 130, 246, 0.05), transparent 70%); }
+           .glass-effect { background-color: rgba(30, 41, 59, 0.3); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); border: 1px solid rgba(71, 85, 105, 0.15); }
+           .glass-effect-input-subtle { background-color: rgba(45, 55, 72, 0.3); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); border: 1px solid rgba(71, 85, 105, 0.15); }
+           button { transition: box-shadow 0.3s ease-in-out, transform 0.1s ease-out; }
+           button:hover { transform: translateY(-1px); }
+           .bg-purple-600:hover { box-shadow: 0 0 10px rgba(168, 85, 247, 0.4), 0 0 15px rgba(168, 85, 247, 0.2); }
+           @keyframes gradient-x {
+               0%, 100% {
+                   background-size: 200% 200%;
+                   background-position: left center;
+               }
+               50% {
+                   background-size: 200% 200%;
+                   background-position: right center;
+               }
+           }
+           .animate-gradient-x {
+               animation: gradient-x 5s ease infinite;
+           }
+        `}</style>
+       {entryPageVideoUrl && !entryPageVideoLoadError ? (
+         <video autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover z-0" src={entryPageVideoUrl} onError={() => setEntryPageVideoLoadError(true)} />
+       ) : (
+         <div className="absolute inset-0 w-full h-full object-cover z-0 flex items-center justify-center bg-gray-800 text-gray-400">
+           {entryPageVideoLoadError ? "Erro ao carregar vídeo." : "Vídeo da capa não disponível."}
+         </div>
+       )}
+        <div className="absolute inset-0 bg-black opacity-40 z-10"></div>
+        <div className="text-center relative z-20">
+          <img src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1" alt="Logo Conecta" className="h-48 md:h-64 w-auto mx-auto mb-8" />
+          <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-4">
+            Bem-vindo ao <span className="bg-gradient-to-r from-purple-400 via-pink-500 to-red-500 bg-clip-text text-transparent animate-gradient-x">CinePrompt AI</span>
           </h1>
-          <p className="text-xl md:text-2xl font-semibold mb-10 relative z-20">
-            <span className="text-soft-purple">Sua Visão Grandiosa, Gerada com</span> <span className="text-white text-2xl md:text-4xl font-extrabold">Inteligência</span>. {/* Alterado "Cinematográfica" para "Grandiosa" */}
+          <p className="text-xl md:text-2xl font-semibold mb-10">
+            <span className="text-purple-300">Sua Visão Grandiosa, Gerada com</span> <span className="bg-gradient-to-r from-gray-100 to-gray-400 bg-clip-text text-transparent font-extrabold">Inteligência</span>.
           </p>
-          <button
-            onClick={handleEnterPlatform} // Usa a função com atraso
-            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 px-12 rounded-lg text-xl shadow-lg transition-all duration-300 hover:shadow-purple-500/80 border border-purple-500 relative overflow-hidden z-20"
-          >
+          <button onClick={() => setShowEntryPage(false)} className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 px-12 rounded-lg text-xl shadow-lg transition-all duration-300 border border-purple-500">
             Entrar na Plataforma
-            <span className="absolute inset-0 bg-white opacity-0 transition-opacity duration-300 hover:opacity-10"></span>
           </button>
         </div>
-        {/* Campo de entrada para o URL do vídeo da página de entrada - REMOVIDO */}
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 font-sans flex flex-col futuristic-background">
-      <style>
-          {`
-          /* Importar a fonte Inter */
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap');
+        body, h1, h2, h3, button, input, select, textarea { font-family: 'Inter', sans-serif; }
+        .futuristic-background { background: #0a0a0a; background-image: radial-gradient(circle at center, rgba(168, 85, 247, 0.08), rgba(59, 130, 246, 0.05), transparent 70%); }
+        .glass-effect { background-color: rgba(30, 41, 59, 0.3); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); border: 1px solid rgba(71, 85, 105, 0.15); }
+        .glass-effect-input-subtle { background-color: rgba(45, 55, 72, 0.3); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); border: 1px solid rgba(71, 85, 105, 0.15); }
+        button { transition: box-shadow 0.3s ease-in-out, transform 0.1s ease-out; }
+        button:hover { transform: translateY(-1px); }
+        .bg-purple-600:hover { box-shadow: 0 0 10px rgba(168, 85, 247, 0.4), 0 0 15px rgba(168, 85, 247, 0.2); }
+        .bg-blue-600:hover { box-shadow: 0 0 10px rgba(59, 130, 246, 0.4), 0 0 15px rgba(59, 130, 246, 0.2); }
+        .bg-emerald-600:hover { box-shadow: 0 0 10px rgba(16, 185, 129, 0.4), 0 0 15px rgba(16, 185, 129, 0.2); }
+        .bg-red-600:hover { box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), 0 0 15px rgba(239, 68, 68, 0.2); }
+        .bg-gray-700:hover { box-shadow: 0 0 8px rgba(156, 163, 175, 0.4), 0 0 10px rgba(156, 163, 175, 0.2); }
+        audio::-webkit-media-controls-panel { background-color: #4a5568; }
+        audio::-webkit-media-controls-play-button { color: #c084fc; }
+        audio::-webkit-media-controls-current-time-display, audio::-webkit-media-controls-time-remaining-display { color: #e2e8f0; }
+        @keyframes gradient-x {
+            0%, 100% {
+                background-size: 200% 200%;
+                background-position: left center;
+            }
+            50% {
+                background-size: 200% 200%;
+                background-position: right center;
+            }
+        }
+        .animate-gradient-x {
+            animation: gradient-x 5s ease infinite;
+        }
+      `}</style>
+     
+      {/* Modais Globais */}
+      <ConfirmationModal {...confirmationModal} />
+      {feedbackMessage.text && (
+        <div className={`fixed top-5 left-1/2 -translate-x-1/2 z-[101] p-3 rounded-lg shadow-xl flex items-center space-x-2 ${feedbackMessage.type === 'success' ? 'bg-green-600' : 'bg-red-600'} text-white`}>
+            {feedbackMessage.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+            <span>{feedbackMessage.text}</span>
+        </div>
+      )}
 
-          /* Aplicar a fonte ao corpo e aos títulos */
-          body {
-            font-family: 'Inter', sans-serif;
-          }
-          h1, h2, h3, h4, h5, h6 {
-            font-family: 'Inter', sans-serif;
-          }
-
-          /* Keyframes para o brilho sutil da borda pulsante na página de entrada */
-          @keyframes pulse-border-subtle {
-            0% { border-color: rgba(168, 85, 247, 0.1); box-shadow: 0 0 2px rgba(168, 85, 247, 0.05); }
-            50% { border-color: rgba(168, 85, 247, 0.3); box-shadow: 0 0 5px rgba(168, 85, 247, 0.15); }
-            100% { border-color: rgba(168, 85, 247, 0.1); box-shadow: 0 0 2px rgba(168, 85, 247, 0.05); }
-          }
-          .pulsing-border-subtle {
-            animation: pulse-border-subtle 3.5s infinite ease-in-out;
-          }
-
-          /* Fundo escuro futurista com gradiente radial sutil */
-          .futuristic-background {
-            background: #0a0a0a; /* Fundo preto puro */
-            background-image: radial-gradient(circle at center, rgba(168, 85, 247, 0.08), rgba(59, 130, 246, 0.05), transparent 70%); /* Gradiente radial sutil */
-            background-size: 100% 100%;
-            animation: futuristic-background-animation 50s ease infinite alternate; /* Animação mais lenta e suave */
-            position: relative;
-            overflow: hidden;
-          }
-
-          /* Efeito de Glassmorphism aprimorado e mais discreto */
-          .glass-effect {
-            background-color: rgba(30, 41, 59, 0.3); /* Mais transparente */
-            backdrop-filter: blur(15px); /* Blur moderado */
-            -webkit-backdrop-filter: blur(15px);
-            border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
-            box-shadow: 0 0 8px rgba(168, 85, 247, 0.3), 0 0 12px rgba(168, 85, 247, 0.15); /* Sombra externa e brilho interno mais sutis */
-          }
-
-          /* Ajustes para brilho dos botões e títulos no resto da app */
-          .text-neon-glow {
-            text-shadow: none; /* Removido o brilho */
-            animation: none; /* Estático na app principal */
-          }
-          .text-neon-glow-subtle { /* Removido o brilho */
-            text-shadow: none;
-          }
-          
-          button {
-            box-shadow: 0 0 3px rgba(168, 85, 247, 0.1); /* Sombra base mais suave */
-            transition: box-shadow 0.3s ease-in-out, transform 0.1s ease-out;
-          }
-          button:hover {
-            box-shadow: 0 0 10px rgba(168, 85, 247, 0.4), 0 0 15px rgba(168, 85, 247, 0.2); /* Brilho no hover mais definido, mas suave */
-            transform: translateY(-1px); /* Leve elevação no hover */
-          }
-          .bg-blue-600:hover { box-shadow: 0 0 10px rgba(59, 130, 246, 0.4), 0 0 15px rgba(59, 130, 246, 0.2); }
-          .bg-emerald-600:hover { box-shadow: 0 0 10px rgba(16, 185, 129, 0.4), 0 0 15px rgba(16, 185, 129, 0.2); }
-          .bg-red-600:hover { box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), 0 0 15px rgba(239, 68, 68, 0.2); }
-          .bg-gray-700:hover { box-shadow: 0 0 8px rgba(156, 163, 175, 0.4), 0 0 10px rgba(156, 163, 175, 0.2); }
-
-          .glass-effect-input-subtle {
-            background-color: rgba(45, 55, 72, 0.3); /* bg-gray-700 com opacidade aumentada */
-            backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
-            border: 1px solid rgba(71, 85, 105, 0.15); /* Borda mais visível */
-          }
-
-          /* Nova variável para roxo mais suave */
-          :root {
-            --color-soft-purple: #a87fe7; /* Um roxo mais claro e menos saturado */
-          }
-          .text-soft-purple {
-            color: var(--color-soft-purple);
-          }
-          `}
-        </style>
       {/* Cabeçalho */}
-      <header className="bg-gray-900 p-4 shadow-lg border-b-2 border-purple-700 glass-effect relative overflow-hidden min-h-[300px] flex flex-col">
-        {/* Vídeo de Fundo do Cabeçalho */}
+      <header className="bg-gray-900 p-4 shadow-lg glass-effect relative overflow-hidden min-h-[400px] flex flex-col justify-start">
         {headerMediaUrl && !videoLoadError ? (
-          <video
-            autoPlay
-            loop
-            muted
-            playsInline
-            className="absolute inset-0 w-full h-full object-cover z-0"
-            src={headerMediaUrl}
-            onError={() => {
-              console.error("Erro ao carregar o vídeo de apresentação do cabeçalho. URL:", headerMediaUrl);
-              setVideoLoadError(true);
-            }}
-            onLoadedData={() => {
-              console.log("Vídeo de cabeçalho carregado com sucesso. URL:", headerMediaUrl);
-              setVideoLoadError(false);
-            }}
-          >
-            Seu navegador não suporta a tag de vídeo.
-          </video>
+            <video autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover z-0" src={headerMediaUrl} onError={() => setVideoLoadError(true)} />
         ) : (
-          <div className="absolute inset-0 w-full h-full object-cover z-0 flex items-center justify-center bg-gray-800 text-gray-400 text-center">
-            {videoLoadError ? (
-              <span>Erro ao carregar o vídeo de apresentação. Verifique o URL.</span>
-            ) : (
-              <span>Insira um URL de vídeo no campo abaixo para vê-lo aqui.</span>
-            )}
-          </div>
+            <div className="absolute inset-0 w-full h-full object-cover z-0 flex items-center justify-center bg-gray-800 text-gray-400">
+                {videoLoadError ? "Erro ao carregar vídeo." : "Vídeo de apresentação indisponível."}
+            </div>
         )}
-        {/* Camada de sobreposição para legibilidade */}
         <div className="absolute inset-0 bg-black opacity-40 z-10"></div>
-
         <div className="container mx-auto flex justify-between items-start relative z-20 pt-4">
-          <div className="flex items-center">
-            {/* Logo da Empresa - Removido drop-shadow */}
-            <img
-              src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1"
-              alt="Logo Conecta"
-              className="h-16 w-auto mr-4"
-            />
-          </div>
-          {/* Botão de menu para mobile */}
-          <div className="md:hidden">
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-100 focus:outline-none">
-              {isSidebarOpen ? <X size={28} /> : <Menu size={28} />}
-            </button>
-          </div>
-          {/* Navegação Desktop */}
-          <nav className="hidden md:flex space-x-8">
-            <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
-              <LayoutGrid size={18} className="mr-1" /> Templates
-              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
-            </a>
-            <button onClick={() => setIsCharacterManagerOpen(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
-              <Users size={18} className="mr-1" /> Meus Personagens
-              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
-            </button>
-            <button onClick={() => setIsStoryManagerOpen(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative"> {/* Novo botão para Gerenciar Séries */}
-              <Film size={18} className="mr-1" /> Minhas Séries
-              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
-            </button>
-            <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
-              <History size={18} className="mr-1" /> Histórico
-              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
-            </a>
-            <button onClick={() => setShowPlansModal(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
-              <DollarSign size={18} className="mr-1" /> Planos
-              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
-            </button>
-            {userId && auth.currentUser && !auth.currentUser.isAnonymous ? (
-              <>
-                <button onClick={() => setShowProfileModal(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
-                  <UserCircle size={18} className="mr-1" /> Meu Perfil
-                  <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+            <img src="https://firebasestorage.googleapis.com/v0/b/platamais.firebasestorage.app/o/projeto%20vm%2Flogo%20conecta.png?alt=media&token=320f1061-918f-4bda-8585-c741efd227c1" alt="Logo Conecta" className="h-16 w-auto" />
+            <div className="md:hidden">
+                <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-100 focus:outline-none">{isSidebarOpen ? <X size={28} /> : <Menu size={28} />}</button>
+            </div>
+            <nav className="hidden md:flex items-center space-x-6">
+                <button onClick={() => setIsCharacterManagerOpen(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center">
+                    <Users size={18} className="mr-1" /> Meus Personagens
                 </button>
-                <button onClick={handleLogout} className="text-gray-300 hover:text-red-400 transition-colors duration-200 flex items-center group relative">
-                  <LogOut size={18} className="mr-1" /> Sair
-                  <span className="absolute bottom-0 left-0 w-full h-0.5 bg-red-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
+                <button onClick={() => setIsStoryManagerOpen(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center">
+                    <Film size={18} className="mr-1" /> Minhas Séries
                 </button>
-              </>
-            ) : (
-              <button onClick={() => setShowAuthModal(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center group relative">
-                <LogIn size={18} className="mr-1" /> Login / Cadastro
-                <span className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300"></span>
-              </button>
-            )}
-          </nav>
+                <button onClick={() => setIsCameraTypeManagerOpen(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center">
+                    <Camera size={18} className="mr-1" /> Tipos de Câmera
+                </button>
+                <button onClick={() => setShowPlansModal(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center">
+                    <DollarSign size={18} className="mr-1" /> Planos
+                </button>
+                {isUserLoggedIn ? (
+                    <>
+                        <button onClick={() => setShowProfileModal(true)} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center">
+                            <UserCircle size={18} className="mr-1" /> Perfil
+                        </button>
+                        <button onClick={handleLogout} className="text-gray-300 hover:text-red-400 transition-colors duration-200 flex items-center">
+                            <LogOut size={18} className="mr-1" /> Sair
+                        </button>
+                    </>
+                ) : (
+                    <button onClick={() => setShowAuthModal(true)} className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg flex items-center">
+                        <LogIn size={18} className="mr-2" /> Login / Cadastro
+                    </button>
+                )}
+            </nav>
         </div>
       </header>
-
-      {/* Subtítulo Impactante */}
-      <div className="w-full text-center py-4 bg-gray-900 border-b border-gray-700 shadow-inner glass-effect">
-        <h2 className="text-xl md:text-3xl font-extrabold text-white">
-          <span>Seu Prompt,</span> <span className="text-soft-purple">Obra Cinematográfica</span> {/* Alterado "Resultado" para "Obra" */}
-        </h2>
-        <p className="text-md md:text-xl font-semibold mb-10 relative z-20">
-            <span className="text-soft-purple">Sua Visão Grandiosa, Gerada com</span> <span className="text-white text-2xl md:text-4xl font-extrabold">Inteligência</span>. {/* Alterado "Cinematográfica" para "Grandiosa" */}
+     
+      {/* Seção do Título */}
+      <div className="w-full bg-gray-950 py-6 text-center border-b-2 border-purple-900 shadow-lg">
+          <h2 className="text-2xl md:text-3xl font-extrabold text-white">
+              Seu Prompt, <span className="bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">Obra Cinematográfica</span>
+          </h2>
+          <p className="text-lg md:text-xl text-gray-300 mt-2">
+              Sua Visão Grandiosa, Gerada com <span className="font-bold text-white">Inteligência.</span>
           </p>
       </div>
-
-      {/* Sidebar para Mobile */}
-      <div className={`fixed inset-y-0 right-0 w-64 bg-gray-900 z-50 transform ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'} transition-transform duration-300 ease-in-out md:hidden glass-effect`}>
-        <div className="p-4 flex justify-between items-center border-b border-gray-700">
-          <h2 className="text-xl font-bold text-purple-500">Menu</h2>
-          <button onClick={() => setIsSidebarOpen(false)} className="text-gray-100 focus:outline-none">
-            <X size={28} />
-          </button>
-        </div>
-        <nav className="flex flex-col p-4 space-y-4">
-          <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center" onClick={() => setIsSidebarOpen(false)}>
-            <LayoutGrid size={18} className="mr-2" /> Templates
-          </a>
-          <button onClick={() => { setIsCharacterManagerOpen(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left">
-            <Users size={18} className="mr-2" /> Meus Personagens
-          </button>
-          <button onClick={() => { setIsStoryManagerOpen(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left"> {/* Novo botão para Gerenciar Séries */}
-            <Film size={18} className="mr-2" /> Minhas Séries
-          </button>
-          <a href="#" className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center" onClick={() => setIsSidebarOpen(false)}>
-            <History size={18} className="mr-2" /> Histórico
-          </a>
-          <button onClick={() => { setShowPlansModal(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left">
-            <DollarSign size={18} className="mr-2" /> Planos
-          </button>
-          {userId && auth.currentUser && !auth.currentUser.isAnonymous ? (
-            <>
-              <button onClick={() => { setShowProfileModal(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left">
-                <UserCircle size={18} className="mr-2" /> Meu Perfil
-              </button>
-              <button onClick={() => { handleLogout(); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-red-400 transition-colors duration-200 flex items-center w-full text-left">
-                <LogOut size={18} className="mr-2" /> Sair
-              </button>
-            </>
-          ) : (
-            <button onClick={() => { setShowAuthModal(true); setIsSidebarOpen(false); }} className="text-gray-300 hover:text-purple-400 transition-colors duration-200 flex items-center w-full text-left">
-              <LogIn size={18} className="mr-2" /> Login / Cadastro
-            </button>
-          )}
-        </nav>
-      </div>
-
-      {/* Mensagem de Feedback Global */}
-      {feedbackMessage.text && (
-        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 p-3 rounded-lg shadow-xl flex items-center space-x-2
-          ${feedbackMessage.type === 'success' ? 'bg-green-600' : 'bg-red-600'} text-white transition-all duration-300 ease-in-out`}>
-          {feedbackMessage.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
-          <span>{feedbackMessage.text}</span>
-        </div>
-      )}
-
-      {/* Modal de Autenticação */}
-      {showAuthModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-md border border-purple-700 glass-effect">
-            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
-              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
-                {isRegisterMode ? <UserPlus size={24} className="mr-2" /> : <LogIn size={24} className="mr-2" />}
-                {isRegisterMode ? 'Registrar' : 'Login'}
-              </h2>
-              <button onClick={() => setShowAuthModal(false)} className="text-gray-400 hover:text-white transition-colors">
-                <X size={28} />
-              </button>
-            </div>
-            <form onSubmit={(e) => { e.preventDefault(); isRegisterMode ? handleRegister() : handleLogin(); }}>
-              <InputField label="E-mail" icon={Mail} type="email" value={authEmail} onChange={handleSetAuthEmail} placeholder="seu@email.com" />
-              <InputField label="Senha" icon={Lock} type="password" value={authPassword} onChange={handleSetAuthPassword} placeholder="••••••••" />
-              <button
-                type="submit"
-                className="mt-4 w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50"
-              >
-                {isRegisterMode ? 'Registrar' : 'Entrar'}
-              </button>
-            </form>
-            <div className="mt-6 text-center text-gray-400">
-              {isRegisterMode ? (
-                <span>Já tem uma conta? <button onClick={() => setIsRegisterMode(false)} className="text-blue-400 hover:underline">Faça Login</button></span>
-              ) : (
-                <span>Não tem uma conta? <button onClick={() => setIsRegisterMode(true)} className="text-blue-400 hover:underline">Cadastre-se</button></span>
-              )}
-            </div>
-            <div className="mt-4 border-t border-gray-700 pt-4">
-              <button
-                onClick={handleGoogleSignIn}
-                className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-red-500/50 flex items-center justify-center"
-              >
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-6 h-6 mr-2" />
-                Entrar com Google
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Perfil do Usuário */}
-      {showProfileModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-md border border-purple-700 glass-effect">
-            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
-              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
-                <UserCircle size={24} className="mr-2" /> Meu Perfil
-              </h2>
-              <button onClick={() => setShowProfileModal(false)} className="text-gray-400 hover:text-white transition-colors">
-                <X size={28} />
-              </button>
-            </div>
-            <div className="mb-4">
-              <p className="text-gray-300 text-sm font-bold mb-2">E-mail:</p>
-              <p className="text-gray-100 bg-gray-700 p-2 rounded-lg">{userEmail}</p>
-            </div>
-            <InputField
-              label="CPF"
-              icon={CreditCard}
-              type="text"
-              value={userCPF}
-              onChange={handleSetUserCPF}
-              placeholder="000.000.000-00"
-              tip="Seu CPF será usado apenas para identificação da conta."
-            />
-            <button
-              onClick={handleSaveProfile}
-              className="mt-4 w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50"
-            >
-              <Save size={20} className="mr-2" /> Salvar Perfil
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Planos de Assinatura */}
-      {showPlansModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-3xl border border-purple-700 glass-effect">
-            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
-              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
-                <DollarSign size={24} className="mr-2" /> Nossos Planos
-              </h2>
-              <button onClick={() => setShowPlansModal(false)} className="text-gray-400 hover:text-white transition-colors">
-                <X size={28} />
-              </button>
-            </div>
-            <div className="grid md:grid-cols-2 gap-6">
-              {/* Plano Gratuito */}
-              <div className="bg-gray-700 p-6 rounded-lg border border-gray-600 shadow-md flex flex-col glass-effect">
-                <h3 className="text-2xl font-bold text-blue-400 mb-3">Gratuito</h3>
-                <p className="text-gray-300 mb-4">Perfeito para começar e experimentar a ferramenta.</p>
-                <p className="text-4xl font-extrabold text-white mb-4">R$ 0<span className="text-lg text-gray-400">/mês</span></p>
-                <ul className="list-disc list-inside text-gray-300 flex-grow">
-                  <li>3 prompts por dia</li>
-                  <li>Acesso limitado a templates</li>
-                  <li>Gerenciamento de 1 personagem</li>
-                  <li>Suporte básico</li>
-                </ul>
-                <button className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-blue-500/50">
-                  Plano Atual
-                </button>
-              </div>
-
-              {/* Plano Pro */}
-              <div className="bg-gradient-to-br from-purple-800 to-gray-800 p-6 rounded-lg border border-purple-500 shadow-xl flex flex-col relative overflow-hidden glass-effect">
-                <span className="absolute top-0 right-0 bg-yellow-500 text-gray-900 text-xs font-bold px-3 py-1 rounded-bl-lg">MAIS POPULAR</span>
-                <h3 className="text-2xl font-bold text-purple-300 mb-3">Pro</h3>
-                <p className="text-gray-300 mb-4">Para criadores e estúdios que buscam resultados ilimitados.</p>
-                <p className="text-4xl font-extrabold text-white mb-4">R$ 49,90<span className="text-lg text-gray-400">/mês</span></p>
-                <ul className="list-disc list-inside text-gray-300 flex-grow">
-                  <li>Prompts ilimitados</li>
-                  <li>Acesso a todos os templates premium</li>
-                  <li>Gerenciamento ilimitado de personagens</li>
-                  <li>Suporte prioritário</li>
-                  <li>Exportação para .json (futuro)</li>
-                </ul>
-                <button className="mt-6 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-emerald-500/50">
-                  Assinar Plano Pro
-                </button>
-              </div>
-            </div>
-            <p className="text-gray-400 text-sm mt-6 text-center">
-              *Os valores das mensalidades são para fins de demonstração. Em um sistema real, seriam configurados via painel administrativo e processados por um gateway de pagamento como o Stripe.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Gerenciamento de Personagens */}
-      {isCharacterManagerOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto border border-purple-700 glass-effect">
-            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
-              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
-                <Users size={24} className="mr-2" /> Meus Personagens
-              </h2>
-              <button onClick={() => { setIsCharacterManagerOpen(false); setEditingCharacter(null); setNewCharacterName(''); setNewCharacterDescription(''); setNewCharacterVisuals(''); setNewCharacterPersonality(''); }} className="text-gray-400 hover:text-white transition-colors">
-                <X size={28} />
-              </button>
-            </div>
-
-            {/* Formulário para Adicionar/Editar Personagem */}
-            <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect">
-              <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
-                {editingCharacter ? <PenSquare size={20} className="mr-2" /> : <PlusCircle size={20} className="mr-2" />}
-                {editingCharacter ? `Editar Personagem: ${editingCharacter.name}` : 'Adicionar Novo Personagem'}
-              </h3>
-              <InputField label="Nome do Personagem" value={newCharacterName} onChange={setNewCharacterName} placeholder="Ex: Capitão Estelar" />
-              <InputField label="Descrição / Papel" type="textarea" value={newCharacterDescription} onChange={setNewCharacterDescription} placeholder="Ex: Um líder corajoso, explorador de galáxias..." />
-              <InputField label="Traços Visuais" type="textarea" value={newCharacterVisuals} onChange={setNewCharacterVisuals} placeholder="Ex: Armadura futurista azul, cabelo loiro esvoaçante, cicatriz no olho direito..." tip="Detalhes de aparência física para consistência visual." />
-              <InputField label="Traços de Personalidade" type="textarea" value={newCharacterPersonality} onChange={setNewCharacterPersonality} placeholder="Ex: Determinado, sarcástico, leal, com um senso de humor seco..." tip="Características psicológicas para consistência de comportamento." />
-              <button
-                onClick={handleSaveCharacter}
-                className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50"
-              >
-                <Save size={20} className="mr-2" /> {editingCharacter ? 'Atualizar Personagem' : 'Salvar Personagem'}
-              </button>
-              {editingCharacter && (
-                <button
-                  onClick={() => { setEditingCharacter(null); setNewCharacterName(''); setNewCharacterDescription(''); setNewCharacterVisuals(''); setNewCharacterPersonality(''); }}
-                  className="mt-4 ml-4 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-2 px-4 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-gray-500/50 border border-gray-600"
-                >
-                  <X size={20} className="mr-2" /> Cancelar Edição
-                </button>
-              )}
-            </div>
-
-            {/* Lista de Personagens Salvos */}
-            <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
-              <Users size={20} className="mr-2" /> Personagens Salvos ({userCharacters.length})
-            </h3>
-            {userCharacters.length === 0 ? (
-              <p className="text-gray-400 text-center py-4">Nenhum personagem salvo ainda. Crie um acima!</p>
-            ) : (
-              <div className="space-y-4">
-                {userCharacters.map((char) => (
-                  <div key={char.id} className="bg-gray-700 p-4 rounded-lg shadow-md flex justify-between items-center border border-gray-600 hover:border-blue-500 transition-colors duration-200 glass-effect">
-                    <div>
-                      <p className="font-bold text-lg text-purple-300">{char.name}</p>
-                      {char.description && <p className="text-sm text-gray-300 mt-1">{char.description}</p>}
-                      {char.visualTraits && <p className="text-xs text-gray-400 mt-1">Visuais: {char.visualTraits}</p>}
-                      {char.personalityTraits && <p className="text-xs text-gray-400 mt-1">Personalidade: {char.personalityTraits}</p>}
-                    </div>
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleEditCharacter(char)}
-                        className="p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all duration-300 transform hover:scale-110 hover:shadow-blue-500/50"
-                        title="Editar"
-                      >
-                        <PenSquare size={18} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCharacter(char.id, char.name)}
-                        className="p-2 rounded-full bg-red-600 hover:bg-red-700 text-white transition-all duration-300 transform hover:scale-110 hover:shadow-red-500/50"
-                        title="Excluir"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Gerenciamento de Séries/Histórias */}
-      {isStoryManagerOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto border border-purple-700 glass-effect">
-            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
-              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
-                <Film size={24} className="mr-2" /> Gerenciar Séries/Histórias
-              </h2>
-              <button onClick={() => { setIsStoryManagerOpen(false); setSelectedStory(null); }} className="text-gray-400 hover:text-white transition-colors">
-                <X size={28} />
-              </button>
-            </div>
-
-            {/* Formulário para Criar Nova Série */}
-            {!selectedStory && (
-              <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect">
-                <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
-                  <PlusCircle size={20} className="mr-2" /> Criar Nova Série
-                </h3>
-                <InputField
-                  label="Título da Série"
-                  value={newStoryTitle}
-                  onChange={setNewStoryTitle}
-                  placeholder="Ex: A Saga do Cavaleiro Estelar"
-                />
-                <InputField
-                  label="Descrição da Série"
-                  type="textarea"
-                  value={newStoryDescription}
-                  onChange={setNewStoryDescription}
-                  placeholder="Ex: Uma épica jornada através da galáxia..."
-                />
-                <InputField
-                  label="Personagem Principal da Série"
-                  type="select"
-                  value={newStoryCharacterId}
-                  onChange={setNewStoryCharacterId}
-                  options={userCharacters.map(char => ({ id: char.id, name: char.name }))}
-                  placeholder="Selecione um personagem..."
-                />
-                <button
-                  onClick={handleCreateStory}
-                  className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50"
-                >
-                  <Save size={20} className="mr-2" /> Criar Série
-                </button>
-              </div>
-            )}
-
-            {/* Lista de Séries Salvas */}
-            {!selectedStory && (
-              <>
-                <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
-                  <Film size={20} className="mr-2" /> Suas Séries ({userStories.length})
-                </h3>
-                {userStories.length === 0 ? (
-                  <p className="text-gray-400 text-center py-4">Nenhuma série salva ainda. Crie uma acima!</p>
-                ) : (
-                  <div className="space-y-4">
-                    {userStories.map((story) => (
-                      <div key={story.id} className="bg-gray-700 p-4 rounded-lg shadow-md flex justify-between items-center border border-gray-600 hover:border-blue-500 transition-colors duration-200 glass-effect">
-                        <div>
-                          <p className="font-bold text-lg text-purple-300">{story.title}</p>
-                          <p className="text-sm text-gray-300 mt-1">{story.description}</p>
-                          <p className="text-xs text-gray-400 mt-1">Personagem: {userCharacters.find(c => c.id === story.characterId)?.name || 'Desconhecido'}</p>
-                        </div>
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => handleViewStoryChapters(story)}
-                            className="p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all duration-300 transform hover:scale-110 hover:shadow-blue-500/50"
-                            title="Ver Capítulos"
-                          >
-                            <ArrowRightCircle size={18} />
-                          </button>
-                          {/* Botões de editar/excluir série (opcional, para futuras implementações) */}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* Visualização e Criação de Capítulos */}
-            {selectedStory && (
-              <div>
-                <button
-                  onClick={() => setSelectedStory(null)}
-                  className="mb-4 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm py-2 px-4 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50"
-                >
-                  <RotateCcw size={16} className="mr-2" /> Voltar para Séries
-                </button>
-                <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
-                  <Film size={20} className="mr-2" /> Capítulos de "{selectedStory.title}"
-                </h3>
-
-                {/* Formulário para Adicionar Capítulo */}
-                <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect">
-                  <h4 className="text-lg font-semibold text-gray-200 mb-3">Adicionar Novo Capítulo</h4>
-                  <InputField
-                    label="Narrativa do Capítulo"
-                    type="textarea"
-                    value={newChapterNarrative}
-                    onChange={setNewChapterNarrative}
-                    placeholder="Descreva a narrativa deste capítulo. Deixe em branco para que a IA crie a narrativa completa."
-                  />
-                  <button
-                    onClick={handleAddChapter}
-                    disabled={isGeneratingChapterContent}
-                    className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isGeneratingChapterContent ? (
-                      <>
-                        <Loader2 size={20} className="mr-2 animate-spin" /> Gerando...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles size={20} className="mr-2" /> Gerar Prompt e Áudio
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                {/* Lista de Capítulos */}
-                {selectedStory.chapters && selectedStory.chapters.length > 0 ? (
-                  <div className="space-y-4">
-                    {selectedStory.chapters.map((chapter) => (
-                      <div key={chapter.id} className="bg-gray-700 p-4 rounded-lg shadow-md flex justify-between items-center border border-gray-600 hover:border-blue-500 transition-colors duration-200 glass-effect">
-                        <div>
-                          <p className="font-bold text-lg text-purple-300">{chapter.chapterNumber}</p>
-                          <p className="text-sm text-gray-300 mt-1">{chapter.narrative}</p>
-                          {chapter.generatedPrompt && (
-                            <div className="mt-2 text-gray-200 text-sm bg-gray-800 p-3 rounded-md">
-                              <p className="font-bold text-purple-300">Prompt Gerado:</p>
-                              <p className="font-mono text-xs break-words">{chapter.generatedPrompt}</p>
-                            </div>
-                          )}
-                          {chapter.generatedAudioUrl && (
-                            <div className="mt-2">
-                              <audio controls src={chapter.generatedAudioUrl} className="w-full">
-                                Seu navegador não suporta o elemento de áudio.
-                              </audio>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-gray-400 text-center py-4">Nenhum capítulo ainda. Adicione um acima!</p>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Gerenciamento de Tipos de Câmera */}
-      {isCameraTypeManagerOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto border border-purple-700 glass-effect">
-            <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
-              <h2 className="text-2xl font-bold text-purple-400 flex items-center">
-                <Camera size={24} className="mr-2" /> Gerenciar Tipos de Câmera
-              </h2>
-              <button onClick={() => { setIsCameraTypeManagerOpen(false); setEditingCameraType(null); setNewCameraTypeName(''); }} className="text-gray-400 hover:text-white transition-colors">
-                <X size={28} />
-              </button>
-            </div>
-
-            {/* Formulário para Adicionar/Editar Tipo de Câmera */}
-            <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect">
-              <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
-                {editingCameraType ? <PenSquare size={20} className="mr-2" /> : <PlusCircle size={20} className="mr-2" />}
-                {editingCameraType ? `Editar Tipo: ${editingCameraType.name}` : 'Adicionar Novo Tipo'}
-              </h3>
-              <InputField
-                label="Nome do Tipo de Câmera"
-                value={newCameraTypeName}
-                onChange={setNewCameraTypeName}
-                placeholder="Ex: Câmera de Ação, Visão de Pássaro"
-              />
-              <button
-                onClick={handleSaveCameraType}
-                className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-purple-500/50"
-              >
-                <Save size={20} className="mr-2" /> {editingCameraType ? 'Atualizar Tipo' : 'Salvar Tipo'}
-              </button>
-              {editingCameraType && (
-                <button
-                  onClick={() => { setEditingCameraType(null); setNewCameraTypeName(''); }}
-                  className="mt-4 ml-4 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-2 px-4 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-gray-500/50 border border-gray-600"
-                >
-                  <X size={20} className="mr-2" /> Cancelar Edição
-                </button>
-              )}
-            </div>
-
-            {/* Lista de Tipos de Câmera Personalizados */}
-            <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center">
-              <Camera size={20} className="mr-2" /> Tipos Personalizados ({userCustomCameraTypes.length})
-            </h3>
-            {userCustomCameraTypes.length === 0 ? (
-              <p className="text-gray-400 text-center py-4">Nenhum tipo de câmera personalizado salvo ainda. Crie um acima!</p>
-            ) : (
-              <div className="space-y-4">
-                {userCustomCameraTypes.map((type) => (
-                  <div key={type.id} className="bg-gray-700 p-4 rounded-lg shadow-md flex justify-between items-center border border-gray-600 hover:border-blue-500 transition-colors duration-200 glass-effect">
-                    <p className="font-bold text-lg text-purple-300">{type.name}</p>
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleEditCameraType(type)}
-                        className="p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-all duration-300 transform hover:scale-110 hover:shadow-blue-500/50"
-                        title="Editar"
-                      >
-                        <PenSquare size={18} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCameraType(type.id, type.name)}
-                        className="p-2 rounded-full bg-red-600 hover:bg-red-700 text-white transition-all duration-300 transform hover:scale-110 hover:shadow-red-500/50"
-                        title="Excluir"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <h3 className="text-xl font-semibold text-gray-200 mt-8 mb-4 flex items-center">
-              <Camera size={20} className="mr-2" /> Tipos Padrão
-            </h3>
-            <div className="space-y-2 text-gray-300">
-              {defaultCameraTypeOptions.map((type) => (
-                <p key={type} className="bg-gray-700 p-2 rounded-lg border border-gray-600">{type}</p>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
+     
       {/* Conteúdo Principal */}
       <main className="container mx-auto flex-grow p-4 md:p-8">
         <div className="lg:grid lg:grid-cols-2 lg:gap-8 flex flex-col">
-          {/* Painel de Controles */}
-          <section className="p-6 rounded-xl shadow-lg mb-8 lg:mb-0 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
-              <Sparkles size={24} className="mr-2 text-soft-purple" /> <span>Crie Seu Prompt de Vídeo</span> <span className="text-soft-purple">IA</span>
-            </h2>
-            <form>
-              <InputField
-                label="URL do Vídeo de Apresentação no Cabeçalho"
-                icon={Youtube}
-                value={headerMediaUrl}
-                onChange={handleSetHeaderMediaUrl}
-                placeholder="Ex: https://assets.mixkit.co/videos/preview/..."
-                tip="Cole o URL direto de um vídeo (MP4 recomendado) ou um URL de vídeo do YouTube (será usado como link)."
-              />
-              <InputField
-                key="videoStyle"
-                label="Estilo do Vídeo"
-                icon={Film}
-                type="select"
-                value={videoStyle}
-                onChange={handleSetVideoStyle}
-                placeholder="Selecione o estilo principal..."
-                options={videoStyleOptions}
-              />
-              <InputField
-                key="theme"
-                label="Tema ou Ambiente"
-                icon={Building}
-                value={theme}
-                onChange={handleSetTheme}
-                placeholder="Ex: Floresta mística ao amanhecer, metrópole cyberpunk..."
-              />
-              <InputField
-                key="narrative"
-                label="Narrativa / Descrição da História"
-                icon={Edit}
-                type="textarea"
-                value={narrative}
-                onChange={handleSetNarrative}
-                placeholder="Descreva brevemente a ação principal ou a cena. Ex: Um explorador solitário encontra um artefato antigo..."
-                tip="Seja conciso, mas descritivo."
-              />
-              <div className="mb-4">
-                <label className="block text-gray-300 text-sm font-bold mb-2 flex items-center">
-                  <User size={18} className="mr-2 text-purple-400" />
-                  Personagens / Figuras
-                </label>
-                <InputField
-                  key="characters"
-                  type="multi-select"
-                  value={characters}
-                  onChange={handleSetCharacters} // Directly use handleSetCharacters
-                  options={userCharacters}
-                  multiple={true}
-                  placeholder="Selecione personagens salvos ou crie um novo..."
-                />
-                <button
-                  type="button"
-                  onClick={() => setIsCharacterManagerOpen(true)}
-                  className="mt-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm py-2 px-4 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50"
-                >
-                  <PlusCircle size={16} className="mr-2" /> Gerenciar Personagens
-                </button>
-              </div>
+            {/* Painel de Controles */}
+            <section className="p-6 rounded-xl shadow-lg mb-8 lg:mb-0 border border-purple-800 glass-effect">
+                <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+                    <Sparkles size={24} className="mr-2 text-purple-300" /> Crie Seu Prompt de Vídeo
+                </h2>
+                <form>
+                    <div className="grid md:grid-cols-2 gap-4">
+                        <InputField label="Estilo do Vídeo" icon={Film} type="select" value={videoStyle} onChange={setVideoStyle} placeholder="Selecione o estilo..." options={videoStyleOptions} />
+                        <InputField label="Formato" icon={Crop} type="select" value={format} onChange={setFormat} placeholder="Selecione a proporção..." options={formatOptions} />
+                    </div>
+                    <InputField label="Tema ou Ambiente" icon={Building} value={theme} onChange={setTheme} placeholder="Ex: Floresta mística, metrópole cyberpunk..." />
+                    <InputField label="Narrativa / Descrição da Cena" icon={Edit} type="textarea" value={narrative} onChange={setNarrative} placeholder="Ex: Um explorador encontra um artefato antigo..." />
+                    <div className="mb-4">
+                        <label className="block text-gray-300 text-sm font-bold mb-2 flex items-center"><User size={18} className="mr-2 text-purple-400" /> Personagens</label>
+                        <InputField type="select" multiple={true} value={selectedCharacters} onChange={setSelectedCharacters} options={userCharacters} placeholder="Selecione personagens..." />
+                        <button type="button" onClick={() => setIsCharacterManagerOpen(true)} className="mt-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm py-2 px-4 rounded-lg"><PlusCircle size={16} className="inline mr-2" /> Gerenciar Personagens</button>
+                    </div>
+                    <div className="grid md:grid-cols-2 gap-4">
+                         <InputField label="Tipo de Câmera" icon={Camera} type="select" value={cameraType} onChange={setCameraType} placeholder="Escolha o movimento..." options={allCameraTypeOptions} />
+                         <InputField label="Iluminação" icon={Lightbulb} type="select" value={lighting} onChange={setLighting} placeholder="Defina a luz..." options={lightingOptions} />
+                         <InputField label="Paleta de Cores" icon={Palette} type="select" value={colorPalette} onChange={setColorPalette} placeholder="Escolha as cores..." options={colorPaletteOptions} />
+                         <InputField label="Qualidade e Detalhes" icon={Sparkles} value={quality} onChange={setQuality} placeholder="Ex: 4K, fotorrealista..." />
+                    </div>
+                    <InputField label="Duração (segundos)" icon={Clock} type="range" value={duration} onChange={setDuration} min={1} max={60} step={1} />
+                    <div className="grid md:grid-cols-2 gap-4">
+                        <InputField label="Idioma do Prompt" icon={Languages} type="select" value={outputLanguage} onChange={setOutputLanguage} options={outputLanguageOptions} />
+                        <InputField label="Voz da Narração" icon={Mic} type="select" value={voiceNarration} onChange={setVoiceNarration} placeholder="Selecione uma voz..." options={voiceNarrationOptions} />
+                    </div>
+                </form>
+            </section>
 
-              <InputField
-                key="cameraType"
-                label="Tipo de Câmera / Movimento"
-                icon={Camera}
-                type="select"
-                value={cameraType}
-                onChange={handleSetCameraType}
-                placeholder="Escolha o movimento da câmera..."
-                options={allCameraTypeOptions} // Use combined options
-              />
-              <button
-                type="button"
-                onClick={() => setIsCameraTypeManagerOpen(true)}
-                className="mt-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm py-2 px-4 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50"
-              >
-                <Edit size={16} className="mr-2" /> Gerenciar Tipos de Câmera
-              </button>
-
-              <InputField
-                key="lighting"
-                label="Iluminação"
-                icon={Lightbulb}
-                type="select"
-                value={lighting}
-                onChange={handleSetLighting}
-                placeholder="Defina a atmosfera de luz..."
-                options={lightingOptions}
-              />
-              <InputField
-                key="colorPalette"
-                label="Paleta de Cores"
-                icon={Palette}
-                type="select"
-                value={colorPalette}
-                onChange={handleSetColorPalette}
-                placeholder="Selecione a cor dominante ou o esquema..."
-                options={colorPaletteOptions}
-              />
-              <InputField
-                key="duration"
-                label="Duração (segundos)"
-                icon={Clock}
-                type="range"
-                value={duration}
-                onChange={handleSetDuration}
-                min={1}
-                max={60}
-                step={1}
-              />
-              <InputField
-                key="format"
-                label="Formato"
-                icon={Crop}
-                type="select"
-                value={format}
-                onChange={handleSetFormat}
-                placeholder="Selecione a proporção do vídeo..."
-                options={formatOptions}
-              />
-              <InputField
-                key="quality"
-                label="Qualidade e Detalhes"
-                icon={Sparkles}
-                value={quality}
-                onChange={handleSetQuality}
-                placeholder="Ex: 4K, 24fps, realismo fotorrealista, detalhes intrincados..."
-                tip="Adicione especificações técnicas ou artísticas."
-              />
-              <InputField
-                key="outputLanguage"
-                label="Idioma do Prompt Final"
-                icon={Languages}
-                type="select"
-                value={outputLanguage}
-                onChange={handleSetOutputLanguage}
-                placeholder="Selecione o idioma do prompt..."
-                options={outputLanguageOptions}
-              />
-              <InputField
-                key="voiceNarration"
-                label="Voz / Narração"
-                icon={Mic}
-                type="select"
-                value={voiceNarration}
-                onChange={handleSetVoiceNaration}
-                placeholder="Selecione a voz ou narração..."
-                options={voiceNarrationOptions}
-              />
-            </form>
-          </section>
-
-          {/* Pré-visualização do Prompt */}
-          <section className="p-6 rounded-xl shadow-lg flex flex-col border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
-              <Sparkles size={24} className="mr-2 text-soft-purple" /> <span>Resultado Final do</span> <span className="text-soft-purple">Prompt</span>
-            </h2>
-            <div className="flex-grow relative">
-              <textarea
-                readOnly={!isManualInputMode} // Torna editável no modo manual
-                value={isLoadingPrompt && !isManualInputMode ? 'Gerando prompt com IA... por favor, aguarde.' : generatedPrompt}
-                onChange={(e) => isManualInputMode && setGeneratedPrompt(e.target.value)} // Permite edição no modo manual
-                className={`w-full h-full min-h-[200px] bg-gray-700 text-gray-100 font-mono p-4 rounded-lg resize-none focus:outline-none ${isLoadingPrompt && !isManualInputMode ? 'opacity-70 italic' : ''} border border-blue-700`}
-                placeholder="Seu prompt gerado aparecerá aqui... ou escreva o seu próprio prompt aqui no modo manual."
-              ></textarea>
-              {isLoadingPrompt && !isManualInputMode && (
-                <div className="absolute inset-0 flex items-center justify-center bg-gray-700 bg-opacity-75 rounded-lg">
-                  <Loader2 size={48} className="animate-spin text-purple-400" />
+            {/* Resultado do Prompt */}
+            <section className="p-6 rounded-xl shadow-lg flex flex-col border border-purple-800 glass-effect">
+                <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+                    <Sparkles size={24} className="mr-2 text-purple-300" /> Resultado do Prompt
+                </h2>
+                <div className="flex-grow relative">
+                    <textarea
+                        readOnly={!isManualInputMode}
+                        value={isLoadingPrompt ? 'Gerando prompt com IA...' : generatedPrompt}
+                        onChange={(e) => isManualInputMode && setGeneratedPrompt(e.target.value)}
+                        className={`w-full h-full min-h-[250px] bg-gray-800 bg-opacity-80 text-gray-100 font-mono p-4 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 border border-gray-600 ${isLoadingPrompt ? 'italic' : ''}`}
+                        placeholder="Seu prompt gerado aparecerá aqui..."
+                    ></textarea>
+                         {isLoadingPrompt && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-gray-800 bg-opacity-50 rounded-lg">
+                                <Loader2 size={48} className="animate-spin text-purple-400" />
+                            </div>
+                        )}
                 </div>
-              )}
-            </div>
-            <div className="mt-6 flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4 justify-center">
-              {!isManualInputMode ? (
-                <button
-                  onClick={generatePromptWithAI}
-                  disabled={isLoadingPrompt}
-                  className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-purple-500/50 disabled:opacity-50 disabled:cursor-not-allowed border border-purple-500"
-                >
-                  {isLoadingPrompt ? (
-                    <>
-                      <Loader2 size={20} className="mr-2" /> Gerando...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles size={20} className="mr-2" /> Gerar com IA
-                    </>
-                  )}
-                </button>
-              ) : (
-                <button
-                  onClick={() => {
-                    setGeneratedPrompt(''); // Limpa o prompt para nova escrita
-                    setIsManualInputMode(false); // Volta para o modo AI se quiser gerar
-                  }}
-                  className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50 border border-gray-600"
-                >
-                  <RotateCcw size={20} className="mr-2" /> Voltar ao Modo IA
-                </button>
-              )}
-
-              <button
-                onClick={() => setIsManualInputMode(!isManualInputMode)}
-                className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50 border border-gray-600"
-                >
-                <Type size={20} className="mr-2" /> {isManualInputMode ? 'Modo IA' : 'Introduzir Manualmente'}
-              </button>
-
-              <button
-                onClick={copyPrompt}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-blue-500/50 border border-blue-500"
-              >
-                <Copy size={20} className="mr-2" /> Copiar Prompt
-                {showCopiedMessage && (
-                  <span className="absolute -top-8 left-1/2 -translate-x-1/2 bg-green-500 text-white text-xs px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    Copiado!
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={resetForm}
-                className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-gray-500/50 border border-gray-600"
-              >
-                <RotateCcw size={20} className="mr-2" /> Limpar Campos
-              </button>
-              <button
-                onClick={savePrompt}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 hover:shadow-emerald-500/50 border border-emerald-500"
-              >
-                <Save size={20} className="mr-2" /> Salvar Prompt
-              </button>
-            </div>
-          </section>
+                <div className="mt-6 flex flex-wrap gap-2 justify-center">
+                    <button onClick={generatePromptWithAI} disabled={isLoadingPrompt} className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg flex items-center disabled:opacity-50 disabled:cursor-not-allowed">
+                        {isLoadingPrompt ? <><Loader2 size={20} className="mr-2 animate-spin" /> Gerando...</> : <><Sparkles size={20} className="mr-2" /> Gerar com IA</>}
+                    </button>
+                    <button onClick={copyPrompt} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><Copy size={20} className="mr-2" /> Copiar</button>
+                    {isUserLoggedIn && <button onClick={savePrompt} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"><Save size={20} className="mr-2" /> Salvar</button>}
+                    <button onClick={resetForm} className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-2 px-4 rounded-lg flex items-center"><RotateCcw size={20} className="mr-2" /> Limpar</button>
+                </div>
+            </section>
         </div>
 
-        {/* Secção de Vídeos do YouTube */}
-        <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
-              <Youtube size={24} className="mr-2 text-soft-purple" /> <span>Visualizador de Vídeos</span> <span className="text-soft-purple">YouTube</span>
-            </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <InputField
-                label="ID do Vídeo YouTube 1"
-                value={youtubeVideoId1}
-                onChange={handleSetYoutubeVideoId1}
-                placeholder="Ex: dQw4w9WgXcQ"
-                tip="Cole apenas o ID do vídeo (a parte final do URL)."
-              />
-              {youtubeVideoId1 && (
-                <div className="relative w-full overflow-hidden rounded-lg shadow-lg border border-gray-700" style={{ paddingTop: '56.25%' }}> {/* 16:9 Aspect Ratio */}
-                  <iframe
-                    className="absolute top-0 left-0 w-full h-full"
-                    src={`https://www.youtube.com/embed/${youtubeVideoId1}`}
-                    frameBorder="0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                    title="YouTube video player 1"
-                  ></iframe>
-                </div>
-              )}
-            </div>
-            <div>
-              <InputField
-                label="ID do Vídeo YouTube 2"
-                value={youtubeVideoId2}
-                onChange={handleSetYoutubeVideoId2}
-                placeholder="Ex: dQw4w9WgXcQ"
-              />
-              {youtubeVideoId2 && (
-                <div className="relative w-full overflow-hidden rounded-lg shadow-lg border border-gray-700" style={{ paddingTop: '56.25%' }}>
-                  <iframe
-                    className="absolute top-0 left-0 w-full h-full"
-                    src={`https://www.youtube.com/embed/${youtubeVideoId2}`}
-                    frameBorder="0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                    title="YouTube video player 2"
-                  ></iframe>
-                </div>
-              )}
-            </div>
-            <div>
-              <InputField
-                label="ID do Vídeo YouTube 3"
-                value={youtubeVideoId3}
-                onChange={handleSetYoutubeVideoId3}
-                placeholder="Ex: dQw4w9WgXcQ"
-              />
-              {youtubeVideoId3 && (
-                <div className="relative w-full overflow-hidden rounded-lg shadow-lg border border-gray-700" style={{ paddingTop: '56.25%' }}>
-                  <iframe
-                    className="absolute top-0 left-0 w-full h-full"
-                    src={`https://www.youtube.com/embed/${youtubeVideoId3}`}
-                    frameBorder="0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                    title="YouTube video player 3"
-                  ></iframe>
-                </div>
-              )}
-            </div>
-            <div>
-              <InputField
-                label="ID do Vídeo YouTube 4"
-                value={youtubeVideoId4}
-                onChange={handleSetYoutubeVideoId4}
-                placeholder="Ex: dQw4w9WgXcQ"
-              />
-              {youtubeVideoId4 && (
-                <div className="relative w-full overflow-hidden rounded-lg shadow-lg border border-gray-700" style={{ paddingTop: '56.25%' }}>
-                  <iframe
-                    className="absolute top-0 left-0 w-full h-full"
-                    src={`https://www.youtube.com/embed/${youtubeVideoId4}`}
-                    frameBorder="0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                    title="YouTube video player 4"
-                  ></iframe>
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
+        {/* --- MODAIS --- */}
 
-        {/* Secção de Histórico de Prompts (apenas para visualização) */}
-        {userId && userPrompts.length > 0 && (
-          <section className="p-6 rounded-xl shadow-lg mt-8 border border-purple-800 glass-effect">
-            <h2 className="text-2xl font-bold text-white mb-6 flex items-center text-neon-glow">
-              <History size={24} className="mr-2 text-soft-purple" /> <span>Seu Histórico de</span> <span className="text-soft-purple">Prompts</span>
-            </h2>
-            <div className="space-y-4">
-              {userPrompts.map((p) => (
-                <div key={p.id} className="bg-gray-700 p-4 rounded-lg shadow-md flex justify-between items-center border border-gray-600 hover:border-blue-500 transition-colors duration-300">
-                  <p className="font-mono text-sm text-gray-200 break-words">{p.prompt}</p>
-                  <p className="text-xs text-gray-400 mt-2">
-                    Criado em: {new Date(p.createdAt.toDate()).toLocaleString()}
-                  </p>
+        {/* Modal de Gerenciamento de Personagens */}
+        {isCharacterManagerOpen && (
+            <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+                <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto border border-purple-700 glass-effect">
+                    <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                        <h2 className="text-2xl font-bold text-purple-400 flex items-center"><Users size={24} className="mr-2" /> Meus Personagens</h2>
+                        <button onClick={() => setIsCharacterManagerOpen(false)} className="text-gray-400 hover:text-white"><X size={28} /></button>
+                    </div>
+                    <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect-input-subtle">
+                        <h3 className="text-xl font-semibold text-gray-200 mb-4">{editingCharacter ? 'Editar Personagem' : 'Adicionar Novo Personagem'}</h3>
+                        <InputField label="Nome" value={newCharacterName} onChange={setNewCharacterName} placeholder="Ex: Capitão Estelar" />
+                        <InputField label="Descrição" type="textarea" value={newCharacterDescription} onChange={setNewCharacterDescription} placeholder="Ex: Um líder corajoso..." />
+                        <InputField label="Traços Visuais" type="textarea" value={newCharacterVisuals} onChange={setNewCharacterVisuals} placeholder="Ex: Armadura futurista azul..." />
+                        <InputField label="Personalidade" type="textarea" value={newCharacterPersonality} onChange={setNewCharacterPersonality} placeholder="Ex: Determinado, sarcástico..." />
+                        <button onClick={handleSaveCharacter} className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg"><Save size={20} className="inline mr-2" /> {editingCharacter ? 'Atualizar' : 'Salvar'}</button>
+                        {editingCharacter && <button onClick={() => setEditingCharacter(null)} className="mt-4 ml-2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg">Cancelar</button>}
+                    </div>
+                    <div className="space-y-4">
+                        {userCharacters.map((char) => (
+                            <div key={char.id} className="bg-gray-700 p-4 rounded-lg flex justify-between items-start">
+                                <div>
+                                    <p className="font-bold text-lg text-purple-300">{char.name}</p>
+                                    <p className="text-sm text-gray-300 mt-1">{char.description}</p>
+                                </div>
+                                <div className="flex space-x-2 flex-shrink-0">
+                                    <button onClick={() => handleEditCharacter(char)} className="p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white" title="Editar"><PenSquare size={18} /></button>
+                                    <button onClick={() => openDeleteCharacterModal(char)} className="p-2 rounded-full bg-red-600 hover:bg-red-700 text-white" title="Excluir"><Trash2 size={18} /></button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-              ))}
             </div>
-          </section>
         )}
+
+        {/* Modal de Gerenciamento de Séries/Histórias */}
+        {isStoryManagerOpen && (
+             <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+                <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto border border-purple-700 glass-effect">
+                    <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                        <h2 className="text-2xl font-bold text-purple-400 flex items-center"><Film size={24} className="mr-2" /> Gerenciar Séries/Histórias</h2>
+                        <button onClick={() => { setIsStoryManagerOpen(false); setSelectedStory(null); }} className="text-gray-400 hover:text-white"><X size={28} /></button>
+                    </div>
+                     {!selectedStory && (
+                        <>
+                            <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect">
+                                <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center"><PlusCircle size={20} className="mr-2" /> Criar Nova Série</h3>
+                                <InputField label="Título da Série" value={newStoryTitle} onChange={setNewStoryTitle} placeholder="Ex: A Saga do Cavaleiro Estelar" />
+                                <InputField label="Descrição da Série" type="textarea" value={newStoryDescription} onChange={setNewStoryDescription} placeholder="Ex: Uma épica jornada..." />
+                                <InputField label="Personagem Principal" type="select" value={newStoryCharacterId} onChange={setNewStoryCharacterId} options={userCharacters.map(c => ({ id: c.id, name: c.name }))} placeholder="Selecione um personagem..." />
+                                <button onClick={handleCreateStory} className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg"><Save size={20} className="mr-2" /> Criar Série</button>
+                            </div>
+                            <h3 className="text-xl font-semibold text-gray-200 mb-4 flex items-center"><Film size={20} className="mr-2" /> Suas Séries ({userStories.length})</h3>
+                            {userStories.length === 0 ? <p className="text-gray-400 text-center py-4">Nenhuma série salva ainda.</p> : (
+                                <div className="space-y-4">
+                                    {userStories.map((story) => (
+                                        <div key={story.id} className="bg-gray-700 p-4 rounded-lg flex justify-between items-center">
+                                            <div>
+                                                <p className="font-bold text-lg text-purple-300">{story.title}</p>
+                                                <p className="text-sm text-gray-300 mt-1">{userCharacters.find(c => c.id === story.characterId)?.name || 'Desconhecido'}</p>
+                                            </div>
+                                            <button onClick={() => handleViewStoryChapters(story)} className="p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white" title="Ver Capítulos"><ArrowRightCircle size={18} /></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    )}
+                    {selectedStory && (
+                        <div>
+                            <button onClick={() => setSelectedStory(null)} className="mb-4 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm py-2 px-4 rounded-lg"><RotateCcw size={16} className="mr-2" /> Voltar para Séries</button>
+                            <h3 className="text-xl font-semibold text-gray-200 mb-4">Capítulos de "{selectedStory.title}"</h3>
+                             <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect">
+                                <h4 className="text-lg font-semibold text-gray-200 mb-3">Adicionar Novo Capítulo</h4>
+                                <InputField label="Narrativa do Capítulo" type="textarea" value={newChapterNarrative} onChange={setNewChapterNarrative} placeholder="Deixe em branco para a IA criar a narrativa." />
+                                <button onClick={handleAddChapter} disabled={isGeneratingChapterContent} className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg disabled:opacity-50">
+                                    {isGeneratingChapterContent ? <><Loader2 size={20} className="mr-2 animate-spin" /> Gerando...</> : <><Sparkles size={20} className="mr-2" /> Gerar Capítulo</>}
+                                </button>
+                            </div>
+                            {selectedStory.chapters && selectedStory.chapters.length > 0 ? (
+                                <div className="space-y-4">
+                                    {selectedStory.chapters.map((chapter) => (
+                                        <div key={chapter.id} className="bg-gray-700 p-4 rounded-lg">
+                                            <p className="font-bold text-lg text-purple-300">Capítulo {chapter.chapterNumber}</p>
+                                            <p className="text-sm text-gray-300 mt-1">{chapter.narrative}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : <p className="text-gray-400 text-center py-4">Nenhum capítulo ainda.</p>}
+                        </div>
+                    )}
+                </div>
+            </div>
+        )}
+
+        {/* Modal de Planos de Assinatura */}
+        {showPlansModal && (
+            <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+                <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-3xl border border-purple-700 glass-effect">
+                    <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                        <h2 className="text-2xl font-bold text-purple-400 flex items-center"><DollarSign size={24} className="mr-2" /> Nossos Planos</h2>
+                        <button onClick={() => setShowPlansModal(false)} className="text-gray-400 hover:text-white"><X size={28} /></button>
+                    </div>
+                    <div className="grid md:grid-cols-2 gap-6">
+                        <div className="bg-gray-700 p-6 rounded-lg border border-gray-600 flex flex-col">
+                            <h3 className="text-2xl font-bold text-blue-400 mb-3">Gratuito</h3>
+                            <p className="text-gray-300 mb-4 flex-grow">Perfeito para começar e experimentar a ferramenta.</p>
+                            <p className="text-4xl font-extrabold text-white mb-4">R$ 0<span className="text-lg text-gray-400">/mês</span></p>
+                            <button className="mt-6 w-full bg-blue-600 text-white font-bold py-3 px-6 rounded-lg cursor-not-allowed opacity-70">Plano Atual</button>
+                        </div>
+                        <div className="bg-gradient-to-br from-purple-800 to-gray-800 p-6 rounded-lg border border-purple-500 flex flex-col">
+                            <h3 className="text-2xl font-bold text-purple-300 mb-3">Pro</h3>
+                            <p className="text-gray-300 mb-4 flex-grow">Para criadores que buscam resultados ilimitados.</p>
+                            <p className="text-4xl font-extrabold text-white mb-4">R$ 49,90<span className="text-lg text-gray-400">/mês</span></p>
+                            <button className="mt-6 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-lg">Assinar Plano Pro</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* Modal de Gerenciamento de Tipos de Câmera */}
+        {isCameraTypeManagerOpen && (
+             <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+                <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto border border-purple-700 glass-effect">
+                    <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                        <h2 className="text-2xl font-bold text-purple-400 flex items-center"><Camera size={24} className="mr-2" /> Tipos de Câmera</h2>
+                        <button onClick={() => setIsCameraTypeManagerOpen(false)} className="text-gray-400 hover:text-white"><X size={28} /></button>
+                    </div>
+                    <div className="mb-8 p-4 border border-gray-700 rounded-lg glass-effect-input-subtle">
+                        <h3 className="text-xl font-semibold text-gray-200 mb-4">{editingCameraType ? 'Editar Tipo' : 'Adicionar Novo Tipo'}</h3>
+                        <InputField label="Nome" value={newCameraTypeName} onChange={setNewCameraTypeName} placeholder="Ex: Visão de Pássaro" />
+                        <button onClick={handleSaveCameraType} className="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg"><Save size={20} className="inline mr-2" /> {editingCameraType ? 'Atualizar' : 'Salvar'}</button>
+                        {editingCameraType && <button onClick={() => setEditingCameraType(null)} className="mt-4 ml-2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg">Cancelar</button>}
+                    </div>
+                    <h3 className="text-xl font-semibold text-gray-200 mb-4">Seus Tipos ({userCustomCameraTypes.length})</h3>
+                    <div className="space-y-2 mb-6">
+                        {userCustomCameraTypes.map((type) => (
+                            <div key={type.id} className="bg-gray-700 p-3 rounded-lg flex justify-between items-center">
+                                <p className="text-purple-300">{type.name}</p>
+                                <div className="flex space-x-2">
+                                    <button onClick={() => handleEditCameraType(type)} className="p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white" title="Editar"><PenSquare size={18} /></button>
+                                    <button onClick={() => openDeleteCameraTypeModal(type)} className="p-2 rounded-full bg-red-600 hover:bg-red-700 text-white" title="Excluir"><Trash2 size={18} /></button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    <h3 className="text-xl font-semibold text-gray-200 mb-4">Tipos Padrão</h3>
+                    <div className="space-y-2 text-gray-300">
+                        {defaultCameraTypeOptions.map(type => <p key={type} className="bg-gray-700 p-2 rounded-lg">{type}</p>)}
+                    </div>
+                </div>
+            </div>
+        )}
+
       </main>
-
-      {/* Rodapé - ID do Usuário */}
+     
+      {/* Rodapé */}
       <footer className="bg-gray-900 p-4 text-center text-gray-400 text-sm border-t-2 border-purple-700 glass-effect">
-        {userId && (
-          <span>
-            ID do Usuário: <span className="font-mono text-xs">{userId}</span>
-          </span>
-        )}
+        {userId && (<span>ID do Usuário: <span className="font-mono text-xs">{userId}</span></span>)}
       </footer>
     </div>
   );
